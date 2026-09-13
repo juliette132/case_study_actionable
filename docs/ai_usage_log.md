@@ -314,6 +314,91 @@ thing. That gap — between "reviewed and looks right" and "confirmed by a
 live run" — is the throughline of this whole session's log, not just this
 entry.
 
+## 2026-09-13 (continued) — Transform layer planning
+
+**Prompt:** *"proceed with the planning phase of the extension; lay out
+the necessary tools and expansions to achieve each tier"* — the optional
+bronze/silver/gold stretch goal.
+
+**What the AI did:** wrote `docs/transform_layer_plan.md` — planning only,
+nothing built. Laid out silver/gold table designs and two tooling options
+(BigQuery Scheduled Queries vs. Dataform, the latter already having its
+API enabled on this project), with a recommendation driven by the Monday
+deadline rather than by which is "better" in the abstract.
+
+**Verified rather than assumed:** the plan's draft included a proposed
+cross-source gold table joining weather and air-quality data by city name.
+Before writing that up as a real recommendation, ran the actual join
+against the real data instead of assuming it would work. Result: the CSV
+contains multiple same-named cities worldwide (a "Paris" in the US, a
+"Berlin" in El Salvador) — joining on city+country against the real
+target locations returned exactly one match (London, GB), not enough to
+be a meaningful demo table. The plan documents this finding and drops the
+table rather than presenting an untested idea as a good one.
+
+## 2026-09-13 (continued) — Expanding weather locations, found an accent bug live
+
+**Prompts:**
+1. *"verify if more datapoints could be obtained via the sql pipeline for
+   the weather api so that more rows can be matched with the sftp
+   files"*
+2. *"prceed with the expansion"*
+3. *"I want the noramlization fo the city names and ocuntry names (accents
+   and lower) to occur int eh bronze layer, type changes, as well as any
+   dedup policies. Silver layer do the join and get rid of the columns we
+   don't need for the aggregation in the gold layer. I want the analysis
+   to be using information from both tables, perhaps combining the avg
+   temperature with the air quality as a metric. Give me a few options
+   for this seciont"*
+
+**What the AI did:**
+- Checked ~57 major world cities against the real `raw_data.import_csv_data`
+  for a correct city+country match (not just city name), then called the
+  live OpenWeatherMap API for all 39 candidates that passed — all 39
+  resolved to the expected city/country. Expanded `WEATHER_LOCATIONS`
+  (`functions/weather_ingest/main.py`, `.env.example`) from 4 cities (1
+  real cross-source match) to 43.
+- Redeployed `weather-ingest` with the new list. Along the way, found that
+  `--set-env-vars` can't hold `WEATHER_LOCATIONS` as-is (its value contains
+  commas, which is `--set-env-vars`'s own delimiter) — verified
+  `--env-vars-file` was the documented fix before using it, rather than
+  guessing at escape syntax.
+- Triggered the deployed function for real: all 43 cities landed.
+- Ran the actual cross-source join against fresh live data. Caught its own
+  mistake: the first join query matched on city name only (no country
+  check) and silently paired Berlin (weather, Germany) with a false-positive
+  Berlin row from the CSV (which is in El Salvador) — the exact bug class
+  the whole exercise was supposed to avoid. Rewrote the join with explicit
+  per-city country verification before presenting any result as correct.
+- That corrected join was still missing one row (Sao Paulo) with no error —
+  traced to OpenWeatherMap returning the accented `São Paulo` while the CSV
+  stores unaccented `Sao Paulo`. Verified an accent-insensitive join
+  expression (`NORMALIZE(..., NFD)` + `REGEXP_REPLACE(..., r'\pM', '')`)
+  against the real rows before writing it into the plan as a fix, rather
+  than asserting it would work.
+- Rewrote `docs/transform_layer_plan.md` for the user's requested layering
+  (normalization/typing/dedup in bronze, the join in silver, pure
+  aggregation in gold — a deliberate departure from the more common
+  "bronze = raw" convention, adopted because the user asked for it, not
+  silently overridden). Flagged a real design gap while doing so: weather
+  stores country as an ISO code, the CSV stores full English names, so a
+  city-name-only join (which is all today's curated 40 cities needed) would
+  quietly reintroduce the multi-city-same-name risk for any city added
+  later — a small static ISO-to-name mapping is needed for a robust join,
+  not built yet, called out rather than glossed over.
+- Produced 5 labeled options (A-E) for the combined weather+air-quality
+  gold metric, each with an honest weakness stated (not just strengths) —
+  including flagging that the composite "comfort score" option has
+  genuinely arbitrary weights the user would need to defend if asked, and
+  that a ~40-point correlation is a thin statistical sample.
+
+**Why this entry is worth reading on its own:** three separate real
+findings in one continuous piece of work (a join missing the country
+check, an accent mismatch, a country-representation mismatch between
+sources), each caught by actually running a query against real data
+immediately after writing it, not by getting either query right on the
+first try.
+
 ## Template for the next entry
 
 ```

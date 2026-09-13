@@ -32,6 +32,18 @@ gcloud secrets add-iam-policy-binding openweather-api-key \
   --role="roles/secretmanager.secretAccessor"
 
 echo "== Deploy the function =="
+# WEATHER_LOCATIONS contains commas (City,CC pairs), which would corrupt
+# --set-env-vars's own comma-delimited syntax - using --env-vars-file (a
+# YAML file) instead avoids delimiter-escaping entirely. Falls back to
+# .env.example's default list if WEATHER_LOCATIONS isn't set in the
+# environment running this script.
+ENV_VARS_FILE="$(mktemp)"
+trap 'rm -f "${ENV_VARS_FILE}"' EXIT
+cat > "${ENV_VARS_FILE}" <<EOF
+GCP_PROJECT_ID: "${PROJECT_ID}"
+WEATHER_LOCATIONS: "${WEATHER_LOCATIONS:-Paris,FR;London,GB;New York,US;Berlin,DE;Amsterdam,NL;Bangkok,TH;Brussels,BE;Budapest,HU;Cairo,EG;Dubai,AE;Helsinki,FI;Istanbul,TR;Jakarta,ID;Lisbon,PT;Nairobi,KE;Oslo,NO;Prague,CZ;Seoul,KR;Singapore,SG;Sydney,AU;Tokyo,JP;Toronto,CA;Warsaw,PL;Accra,GH;Auckland,NZ;Bogota,CO;Cape Town,ZA;Casablanca,MA;Chicago,US;Doha,QA;Geneva,CH;Hanoi,VN;Johannesburg,ZA;Kuala Lumpur,MY;Lima,PE;Los Angeles,US;Manila,PH;Reykjavik,IS;Riyadh,SA;Sao Paulo,BR;Shanghai,CN;Wellington,NZ;Zurich,CH}"
+EOF
+
 gcloud functions deploy "${FUNCTION_NAME}" \
   --project="${PROJECT_ID}" \
   --gen2 \
@@ -42,7 +54,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --trigger-http \
   --no-allow-unauthenticated \
   --service-account="${SERVICE_ACCOUNT}" \
-  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID}"
+  --env-vars-file="${ENV_VARS_FILE}"
 
 echo "== Let Cloud Scheduler invoke it =="
 gcloud functions add-invoker-policy-binding "${FUNCTION_NAME}" \
