@@ -27,8 +27,11 @@ from google.cloud import bigquery, secretmanager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("weather_ingest")
 
-# Cloud Functions (2nd gen) sets GOOGLE_CLOUD_PROJECT automatically at
-# runtime, so no extra deploy-time config is needed for the project id.
+# NOTE: despite older Cloud Functions docs/folklore, GOOGLE_CLOUD_PROJECT is
+# NOT reliably auto-populated on gen2 (confirmed by a live deploy failing
+# with "Set GCP_PROJECT_ID..." until it was passed explicitly) — the deploy
+# scripts always pass GCP_PROJECT_ID via --set-env-vars. Both env var names
+# are still checked here so a manually-set GOOGLE_CLOUD_PROJECT works too.
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 SECRET_NAME = os.environ.get("OPENWEATHER_SECRET_NAME", "openweather-api-key")
 SECRET_VERSION = os.environ.get("OPENWEATHER_SECRET_VERSION", "latest")
