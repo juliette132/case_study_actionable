@@ -8,14 +8,17 @@ GCP project: `case-study-act`.
 
 ## Status
 
-- [x] OpenWeatherMap API → BigQuery (`raw_data.import_weather`) — built, run
-      once against the real project, see `docs/ai_usage_log.md` for details
-- [x] SFTP CSVs → BigQuery (`raw_data.import_csv_data`) — built and tested
+- [x] OpenWeatherMap API → BigQuery (`raw_data.import_weather`) — built and
+      verified, see `docs/ai_usage_log.md` for details
+- [x] SFTP CSVs → BigQuery (`raw_data.import_csv_data`) — built and verified
       against a real SFTPCloud instance with a real Kaggle CSV (23,463 rows,
       the [Global Air Pollution dataset](https://www.kaggle.com/datasets/hasibalmuzdadid/global-air-pollution-dataset));
       dedup-on-rerun verified live too
-- [ ] Deployed as scheduled Cloud Functions (currently local-only; deploy
-      scripts are written and reviewed but not run, see `scripts/`)
+- [x] Deployed as scheduled Cloud Functions + Cloud Scheduler, both
+      running hourly (`0 * * * *`) in `europe-west1`. Four real bugs
+      surfaced only by actually deploying (not by review) and are fixed in
+      `scripts/` — see `docs/ai_usage_log.md` and `docs/architecture.md`
+      ("Security / IAM") for what they were.
 - [ ] Optional: bronze/silver/gold transform layer
 
 ## Repo layout
@@ -82,9 +85,8 @@ bq query --use_legacy_sql=false \
 
 ## Running the SFTP ingestion locally
 
-Needs an SFTP account and a CSV file uploaded first (not yet set up — see
-Status above). Once `.env` has `SFTP_HOST`/`SFTP_USERNAME`/etc. filled in
-and the password or key stored in Secret Manager:
+Needs `SFTP_HOST`/`SFTP_USERNAME`/etc. set (see `.env.example`) and the
+password or key stored in Secret Manager:
 
 ```
 pip install -r functions/sftp_ingest/requirements.txt
@@ -97,13 +99,43 @@ already recorded in `raw_data._ingested_files`, and loads the rest into
 
 ## Deploying as Cloud Functions + Cloud Scheduler
 
-Not done yet. `scripts/deploy_weather.sh` and `scripts/deploy_sftp.sh`
-create each function's dedicated service account, scope its IAM to exactly
-the dataset/secret it needs, deploy the function
-(`--no-allow-unauthenticated`), and create its Cloud Scheduler job. Written
-and reviewed, not executed — review against `gcloud functions deploy --help`
-before running, and fill in the `SFTP_*` placeholders in
-`deploy_sftp.sh` once that account exists.
+Both are deployed and running hourly. `scripts/deploy_weather.sh` and
+`scripts/deploy_sftp.sh` create each function's dedicated service account,
+scope its IAM to exactly the dataset/secret/job-permission it needs, deploy
+the function (`--no-allow-unauthenticated`), and create/update its Cloud
+Scheduler job — safe to re-run.
+
+Before running `deploy_sftp.sh`, export the real SFTP values as env vars
+first (don't hardcode them — this repo is public):
+```
+export SFTP_HOST="your-instance.sftpcloud.io"
+export SFTP_USERNAME="your-username"
+bash scripts/deploy_sftp.sh
+```
+
+Four real issues only surfaced by actually deploying, all now fixed in the
+scripts (see `docs/architecture.md` "Security / IAM" and
+`docs/ai_usage_log.md` for the full story):
+1. `bq add-iam-policy-binding` on a dataset needs Google allowlisting this
+   project doesn't have — replaced with `scripts/grant_dataset_access.py`
+   (the older ACL mechanism).
+2. `GOOGLE_CLOUD_PROJECT` is not reliably auto-set on gen2 despite
+   docs/folklore suggesting otherwise — `GCP_PROJECT_ID` is now always
+   passed explicitly via `--set-env-vars`.
+3. `sftp-ingest` needs `roles/bigquery.jobUser` at the **project** level
+   (not just dataset-scoped `dataEditor`) because it runs LOAD/QUERY jobs,
+   which are project-scoped resources in BigQuery — unlike
+   `weather-ingest`'s plain streaming inserts.
+4. Running the deploy script from Git Bash on Windows can mangle a bare
+   `/` argument into a Windows path (MSYS path conversion) — if
+   `SFTP_REMOTE_DIR` comes out wrong, fix it from PowerShell instead (see
+   the comment in `deploy_sftp.sh`).
+
+To manually trigger either job instead of waiting for the schedule:
+```
+gcloud scheduler jobs run weather-ingest-schedule --location=europe-west1
+gcloud scheduler jobs run sftp-ingest-schedule --location=europe-west1
+```
 
 ## Design notes
 

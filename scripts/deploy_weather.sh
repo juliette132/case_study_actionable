@@ -19,10 +19,11 @@ gcloud iam service-accounts create weather-ingest-sa \
   || echo "(already exists, continuing)"
 
 echo "== Dataset-scoped BigQuery access (not project-wide) =="
-bq add-iam-policy-binding \
-  --member="serviceAccount:${SERVICE_ACCOUNT}" \
-  --role="roles/bigquery.dataEditor" \
-  "${PROJECT_ID}:raw_data"
+# bq add-iam-policy-binding on a dataset requires allowlisting Google hasn't
+# granted this project ("This feature requires allowlisting") - using the
+# older ACL-based equivalent instead. Needs google-cloud-bigquery installed
+# (e.g. run from inside .venv).
+python scripts/grant_dataset_access.py "${PROJECT_ID}" raw_data "${SERVICE_ACCOUNT}"
 
 echo "== Secret-scoped Secret Manager access (not project-wide) =="
 gcloud secrets add-iam-policy-binding openweather-api-key \
@@ -40,7 +41,8 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --entry-point=weather_ingest \
   --trigger-http \
   --no-allow-unauthenticated \
-  --service-account="${SERVICE_ACCOUNT}"
+  --service-account="${SERVICE_ACCOUNT}" \
+  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID}"
 
 echo "== Let Cloud Scheduler invoke it =="
 gcloud functions add-invoker-policy-binding "${FUNCTION_NAME}" \
@@ -53,7 +55,10 @@ FUNCTION_URI=$(gcloud functions describe "${FUNCTION_NAME}" \
   --format='value(serviceConfig.uri)')
 
 echo "== Schedule it (${SCHEDULE}) =="
-gcloud scheduler jobs create http weather-ingest-schedule \
+SCHEDULER_ACTION="create"
+gcloud scheduler jobs describe weather-ingest-schedule --project="${PROJECT_ID}" --location="${REGION}" &>/dev/null \
+  && SCHEDULER_ACTION="update"
+gcloud scheduler jobs "${SCHEDULER_ACTION}" http weather-ingest-schedule \
   --project="${PROJECT_ID}" \
   --location="${REGION}" \
   --schedule="${SCHEDULE}" \
