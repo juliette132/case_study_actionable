@@ -19,7 +19,10 @@ GCP project: `case-study-act`.
       surfaced only by actually deploying (not by review) and are fixed in
       `scripts/` — see `docs/ai_usage_log.md` and `docs/architecture.md`
       ("Security / IAM") for what they were.
-- [ ] Optional: bronze/silver/gold transform layer
+- [~] Optional: bronze/silver/gold transform layer — **bronze built and
+      tested** (`bronze.weather`, `bronze.air_quality`,
+      `bronze.country_code_map`); silver and gold not started yet. See
+      `docs/transform_layer_plan.md`.
 
 ## Repo layout
 
@@ -31,11 +34,18 @@ functions/
   sftp_ingest/
     main.py            # ingestion logic + Cloud Function entry point
     requirements.txt
+sql/
+  bronze/
+    weather.sql               # bronze.weather build query
+    air_quality.sql            # bronze.air_quality build query
+    country_to_iso_udf.sql      # console convenience only, unused by the pipeline
 scripts/
   deploy_weather.sh      # gcloud deploy commands, reviewed, not yet run
   deploy_sftp.sh          # same, for the SFTP function
+  build_country_code_map.py  # builds bronze.country_code_map from real data
 docs/
   architecture.md       # design rationale, IAM, deploy commands, roadmap
+  transform_layer_plan.md  # bronze/silver/gold design, decisions, test results
   ai_usage_log.md        # mandatory AI-usage documentation for the exercise
 .env.example              # config template — copy to .env for local runs
 ```

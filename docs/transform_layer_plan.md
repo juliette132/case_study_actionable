@@ -1,8 +1,10 @@
 # Transform layer plan (bronze / silver / gold)
 
-Planning only — nothing in this doc is built yet. This is the "optional
-stretch" from the brief; the mandatory ingestion work (both sources, live
-and scheduled) is already done and doesn't depend on any of this.
+This is the "optional stretch" from the brief; the mandatory ingestion
+work (both sources, live and scheduled) is already done and doesn't
+depend on any of this. **Tier 1 (bronze) is now built and tested**
+(SQL in `sql/bronze/`); silver and gold are still planning below until
+they get the same treatment.
 
 **Layering, as directed:** `raw_data.*` (already built) is the ingestion
 landing zone — source-shaped, append-only, no cleanup. Bronze is where
@@ -12,14 +14,35 @@ cleanup a tier earlier than the more common medallion convention of
 "bronze = raw" — a legitimate variant, and simpler here since there are
 only two sources to conform before the one join that matters.)
 
-## Tier 1 — Bronze (`bronze` dataset): normalized, typed, deduplicated
+## Tier 1 — Bronze (`bronze` dataset): normalized, typed, deduplicated ✅ built and tested
 
-One row per source record still — no joining, no aggregation yet.
+One row per source record still — no joining, no aggregation yet. SQL:
+`sql/bronze/weather.sql`, `sql/bronze/air_quality.sql`,
+`scripts/build_country_code_map.py`.
 
 | Table | Source | What it does |
 |---|---|---|
-| `bronze.weather` | `raw_data.import_weather` | Adds `city_key` (accent-stripped, lowercased `city_name` — see normalization expression below) and `country_key` (lowercased ISO code, already clean). Dedups via `ROW_NUMBER() OVER (PARTITION BY location_query, observed_at ORDER BY ingested_at DESC)`, keeping rank 1. Drops `raw_response`. Types are already correct from bronze ingestion. |
-| `bronze.air_quality` | `raw_data.import_csv_data` | Adds `city_key`/`country_key` normalized the same way from `City`/`Country`. Casts every `... AQI Value` column from STRING to INT64 (BigQuery's CSV autodetect left them as STRING). Dedups on `(city_key, country_key)` — see caveat below. |
+| `bronze.weather` | `raw_data.import_weather` | Adds `city_key` (accent-stripped, lowercased `city_name` — see normalization expression below) and `country_key` (= the ISO code weather already stores). Dedups via `ROW_NUMBER() OVER (PARTITION BY location_query, observed_at ORDER BY ingested_at DESC)`, keeping rank 1. Drops `raw_response`. |
+| `bronze.air_quality` | `raw_data.import_csv_data` | Adds `city_key` normalized the same way from `City`. `country_key` resolved via a **JOIN** against `bronze.country_code_map` (not a UDF — see below). Casts every `... AQI Value` column from STRING to INT64 via `SAFE_CAST`. Dedups on `(city_key, country_key)` — see caveat below. |
+
+**Test results (real data, run 2026-09-13):**
+- Weather: 55 raw rows → 51 bronze rows. The 4 removed were real
+  duplicates — concrete evidence that the ingestion script's `insertId`
+  streaming-dedup is genuinely best-effort, not a hard guarantee (as
+  already documented in `docs/architecture.md` "Idempotence"), not just a
+  theoretical caveat.
+- Air quality: 23,463 → 23,463 (no duplicates existed).
+- Zero duplicate keys remaining in either table after dedup.
+- AQI values now sort correctly as integers (top 3 are all `500`
+  /"Hazardous" — Tajpur, Faridabad, Jodhpur, India — plausible). As
+  STRING, `"500"` would have sorted below `"99"`, silently breaking any
+  ranking built on top of it.
+- Country resolution: 23,463 rows, 427 with `country_key IS NULL` — but
+  **all 427** have `country_name IS NULL` in the source itself (missing
+  data, e.g. the "Lagos"/"Stockholm" rows found during location
+  verification). Zero rows where a real country name failed to resolve —
+  the 175-country dictionary has complete coverage of what's actually
+  present.
 
 **Normalization expression** (verified against real data, not assumed —
 this is what caught São Paulo not joining on a plain string match):
@@ -45,18 +68,39 @@ Cheapest fix if/when it matters: have `sftp_ingest` stamp a
 change to `load_csv()`'s job config), not something to build speculatively
 today.
 
-**Country-code mapping, needed for a correct join later:** weather stores
+**Country-code mapping — built, not just planned.** weather stores
 `country` as an ISO-2 code (`FR`, `DE`); the CSV stores full English names
-(`France`, `Germany`). A city-name-only join (what today's verification
-query used) only avoided the "multiple Berlins worldwide" problem because
-the 40 candidate cities were hand-checked one at a time. For the actual
-silver join to be robust for any *future* added city — not just today's
-curated list — `country_key` needs a real translation, not just
-lowercasing. Simplest fix: a small static mapping (`WITH country_codes AS
-(SELECT * FROM UNNEST([STRUCT('fr' AS iso, 'france' AS name), ...]))`)
-covering just the ~40 countries in play, joined in alongside the city key.
-Bounded and explicit rather than pulling in a public reference dataset for
-40 rows.
+(`France`, `Germany`). A city-name-only join (what the original
+verification query used) only avoided the "multiple Berlins worldwide"
+problem because the 40 candidate cities were hand-checked one at a time —
+not robust for any city added later without repeating that by hand.
+
+`bronze.country_code_map` (`scripts/build_country_code_map.py`) fixes this
+generically: it pulls **every distinct country name actually present** in
+`raw_data.import_csv_data` (175, not the ~40 originally guessed at) and
+resolves each to an ISO-2 code via `pycountry` (official ISO 3166 data),
+with 5 manual overrides for names `pycountry` doesn't match automatically
+(e.g. `"Turkey"` — `pycountry`'s primary name is now `"Türkiye"` since a
+2022 rename; `"Bolivia (Plurinational State of)"` — a punctuation
+mismatch against the official long form). The script asserts zero
+unmatched names before loading, so a future country that fails to resolve
+is a loud build failure, not a silently wrong/missing mapping.
+
+**This is a table, not a function — deliberately, after testing the
+alternative.** The original plan was a callable "macro-like" UDF wrapping
+the table lookup. Built and tested live; BigQuery rejected it twice:
+`"Unsupported subquery with table in join predicate"` when called inside
+a JOIN condition, and `"Correlated subqueries that reference other tables
+are not supported"` even when called per-row in a plain SELECT against
+another table. A table-referencing SQL UDF only works for single literal
+calls (`SELECT bronze.country_to_iso('France')`), not bulk resolution —
+not a workaround-able syntax issue, a real BigQuery engine limitation.
+`bronze.air_quality` resolves `country_key` with a plain `LEFT JOIN`
+instead, which is the only proven-working approach and still gets the
+result the function was meant to provide: resolved once, in bronze,
+reused everywhere downstream. The UDF still exists
+(`sql/bronze/country_to_iso_udf.sql`) as a convenience for one-off console
+lookups, but the actual pipeline doesn't call it.
 
 ## Tier 2 — Silver (`silver` dataset): the join, pruned to what gold needs
 
