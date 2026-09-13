@@ -3,8 +3,13 @@
 #
 # NOT run automatically by anything in this repo — review, then run
 # yourself: `bash scripts/deploy_sftp.sh`. Requires `gcloud` authenticated
-# against PROJECT_ID below, and the SFTP account/secret already created
-# (see README / .env.example) — fill in the SFTP_* values below first.
+# against PROJECT_ID below.
+#
+# This repo is PUBLIC — do not commit real SFTP_HOST/SFTP_USERNAME values
+# here even though the password itself stays in Secret Manager; fill them
+# in locally (uncommitted) before running, e.g. by exporting them as env
+# vars just before `bash scripts/deploy_sftp.sh`, or in a local copy that
+# stays untracked.
 set -euo pipefail
 
 PROJECT_ID="case-study-act"
@@ -13,10 +18,10 @@ FUNCTION_NAME="sftp-ingest"
 SERVICE_ACCOUNT="sftp-ingest-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 SCHEDULE="0 * * * *"            # every hour, on the hour — adjust as needed
 
-# --- fill these in once the SFTP account exists ---
-SFTP_HOST="CHANGE_ME.sftpcloud.io"
-SFTP_USERNAME="CHANGE_ME"
-SFTP_REMOTE_DIR="/"
+# --- fill these in (or export as env vars before running — see note above) ---
+SFTP_HOST="${SFTP_HOST:-CHANGE_ME.sftpcloud.io}"
+SFTP_USERNAME="${SFTP_USERNAME:-CHANGE_ME}"
+SFTP_REMOTE_DIR="${SFTP_REMOTE_DIR:-/}"
 # Whichever one of these two you actually created a secret for; leave the
 # other blank. Matches SFTP_PASSWORD_SECRET_NAME / SFTP_PRIVATE_KEY_SECRET_NAME
 # in .env.example.
