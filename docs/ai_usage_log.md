@@ -144,6 +144,36 @@ Secret Manager → BigQuery script).
   connection and CSV load path have not been exercised against a real
   server — there's no SFTP account yet to test against.
 
+## 2026-09-13 (continued) — First live SFTP connection test
+
+**Context:** the user created an SFTPCloud instance (`cozy-penguin`,
+`eu-west-1.sftpcloud.io`) and pasted its host/username/password directly
+into chat.
+
+**What the AI did:**
+- Created the `sftp-password` secret in Secret Manager by piping the value
+  straight into `gcloud secrets create ... --data-file=-`, so the plaintext
+  never touched a file on disk.
+- Ran `functions/sftp_ingest/main.py` against the real instance.
+
+**Corrected — caught by running it, not by inspection:**
+- First attempt failed authentication entirely. Root cause: piping a string
+  to a native command's stdin in PowerShell (`"x" | gcloud ... --data-file=-`)
+  appends a trailing newline, so the stored secret was the password plus
+  `\n`, not the exact password the user provided. Fixed by writing the
+  value to a temp file with `[System.IO.File]::WriteAllText` (which adds no
+  trailing newline), adding it as a new secret version via
+  `--data-file=<path>`, then deleting the temp file. Re-running confirmed
+  authentication, SFTP listing, and the BigQuery control-table setup all
+  work end-to-end — only 0 files were found, expected since no CSV has
+  been uploaded to the instance yet.
+
+**Note on handling the credential itself:** the raw password appeared in
+the user's chat message (unavoidable — that's how it was shared) but was
+never written into any file in this repo or the scratchpad; it went
+directly from the conversation into Secret Manager and is referenced
+everywhere else in code/docs only by the secret's *name*, not its value.
+
 ## Template for the next entry
 
 ```
