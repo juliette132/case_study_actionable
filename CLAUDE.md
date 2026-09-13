@@ -19,15 +19,22 @@ don't just skim once.
 
 ## Git workflow
 
-- **Every branch targets `main` directly. Never branch off another
-  unmerged feature branch, even when the new work genuinely needs files
-  that only exist there.** This was gotten wrong four times in a row on
-  this repo (stacking plan→bronze→silver→gold branches on each other),
-  and one instance actually merged into the wrong branch before being
-  caught, silently leaving `main` without an entire tier of work. If work
-  truly depends on another branch's unmerged content, wait for that
-  branch to merge first, or accept the PR's diff will look bundled until
-  it does — don't chain branches to work around it.
+- **Never create a branch unless explicitly asked for one.** Do not
+  proactively branch "to be safe" or "per house style" before making
+  changes. Commit locally on whatever branch is currently checked out.
+  The GitHub ruleset already blocks pushing/merging straight to `main`
+  without a PR, so this can't silently corrupt `main` — it just means
+  branching and opening a PR are things the user asks for, not things
+  that happen automatically alongside every change.
+- **When a branch is explicitly requested: it targets `main` directly.
+  Never branch off another unmerged feature branch**, even when the new
+  work genuinely needs files that only exist there. This was gotten wrong
+  four times in a row on this repo (stacking plan→bronze→silver→gold
+  branches on each other), and one instance actually merged into the
+  wrong branch before being caught, silently leaving `main` without an
+  entire tier of work. If work truly depends on another branch's unmerged
+  content, wait for that branch to merge first, or accept the PR's diff
+  will look bundled until it does — don't chain branches to work around it.
 - One PR per logical unit of work, always into `main`. This repo uses a
   GitHub ruleset blocking direct pushes/merges to `main` without a PR.
 - **Separate commits for source/code changes vs. documentation changes**,
