@@ -485,6 +485,113 @@ against an independently-known expected value. "The build succeeded" and
 "the build is correct" are different claims, and this is the one place
 in this whole exercise where that distinction was the entire finding.
 
+## 2026-09-13 (continued) — Gold layer (A, D, E)
+
+**Prompt:** *"make sure the corrections are done in bronze layer rather
+than silver layer and proceed with gold option, make sure to walk through
+the logic once its completed"*
+
+**What the AI did:**
+- Verified (by grepping both SQL files, not by memory of having written
+  them correctly) that the country-key correction genuinely lives in
+  `sql/bronze/air_quality.sql`/`build_country_code_map.py`, and that
+  `sql/silver/weather_air_quality.sql` only reads already-resolved
+  columns — confirming the user's instruction was already satisfied
+  rather than assuming so.
+- Built all three previously-agreed gold tables (A: side-by-side summary,
+  D: temperature×AQI-category bucket matrix, E: combined-extremes rank)
+  and ran them against real silver data.
+
+**Verified rather than assumed:** each table's row/bucket-total count was
+checked against the known-correct silver count (40) to catch any row loss
+or duplication from the aggregation logic itself, not just checked for
+"did the query run." E's top result (Riyadh) was cross-checked against
+the same city's numbers surfaced earlier in the session by manual
+inspection, rather than trusting the ranking logic on faith because the
+query executed without error.
+
+**Not built:** the two single-source gold aggregates from the original
+plan (`daily_weather_summary`, `air_quality_by_country`) were superseded
+by the user's A/D/E choice — noted in the plan doc rather than silently
+dropped.
+
+## 2026-09-13 (continued) — Replaced option E with a geographic analysis
+
+**Prompts:**
+1. *"i don't like option E, it doesn't actually pull any interesting
+   conclusions. can you instead compare locations with the longitude and
+   latitude of the weather data and the air quality data? see if there is
+   a trend for cities nearby each other"*
+2. *"once you are done, run the code once to see if it creates the right
+   tables in big query, then create a PR for me to check"*
+3. *"get rid of option e altogether"*
+
+**What the AI did:**
+- Checked feasibility before designing anything: with only 40 mostly
+  world-capital cities, verified there were actually enough nearby pairs
+  (via a real `ST_DISTANCE` query) to make a proximity analysis
+  worthwhile, rather than assuming it would work out.
+- Built two tables answering the proximity question two ways: one row
+  per city (statistically defensible, 40 independent observations) and
+  the full 780-pair breakdown (useful for eyeballing a trend, explicitly
+  documented as non-independent observations in its own SQL comments).
+- Found and reported a genuinely nuanced result rather than forcing a
+  clean headline: AQI similarity does rise with distance across
+  bucketed averages (a real trend), but the overall linear correlation is
+  ~0 (0.021) - the trend exists but is weak, and the doc says so plainly
+  instead of picking whichever framing sounds more impressive.
+- Removed option E completely on request - deleted the SQL file, dropped
+  the live BigQuery table, and rewrote the plan doc's Tier 3 section to
+  describe only what was actually built, rather than leaving E as a
+  struck-through "considered and discarded" entry with no future
+  reference value.
+- Ran every new table for real against BigQuery per the explicit
+  instruction, and confirmed the materialized tables matched the
+  ad-hoc verification queries exactly before committing anything.
+
+## 2026-09-13 (continued) — Repeated the branch-targeting mistake, then fixed it properly
+
+**Prompt:** *"i've noticed you are trying to commit gold branch into
+silver branch, silver branch into bronze, etc. Why? I only want 1 main
+branch and first commit the plan, then the bronze, then the silver, etc
+into main, not into each other"*
+
+**What happened:** the exact same mistake as PR #2 (branching a new
+tier's work off the previous tier's still-open branch, so its PR's base
+defaults to that branch instead of `main`) was repeated three more times
+in a row (plan→deploy-fixes, bronze→transform-layer-plan, silver→bronze,
+gold→silver) without being caught — and one of them, bronze into
+transform-layer-plan, was actually **merged** before the user caught it,
+meaning `main` was silently missing the entire transform layer. The
+underlying reason: each tier's work genuinely depended on files the
+previous tier had written (the plan doc, the bronze SQL) that didn't
+exist on `main` yet, so branching from the prior feature branch was the
+path of least resistance - but that's a reason the *files* needed to
+exist, not a reason the *PR* needed to target that branch instead of
+`main`.
+
+**How it was fixed, not just papered over:** rather than only retargeting
+PR bases (which would have still shown bundled, confusing diffs until
+each merged in order), rebuilt the four branches from scratch - backed up
+originals as `backup/*` branches first, then cherry-picked each tier's
+own commits onto a fresh branch built on top of the previous tier's
+already-correct state, in order (plan onto `main`, bronze onto the new
+plan branch, etc.). Confirmed byte-identical file content before pushing
+(`git diff backup/gold-layer gold-layer` - empty) so this was a pure
+history/ancestry fix, not a content change. Force-pushed all four,
+retargeted PRs #5/#7/#8 to `main`, and opened a new PR (#9) to properly
+land bronze since the original #6 had already merged into the wrong
+branch and couldn't be retargeted - the same recovery pattern used for
+the PR #2/#3 mistake, applied a second time because the underlying habit
+hadn't actually been fixed the first time, only that one instance of it.
+
+**Why this belongs in the log prominently, not as a footnote:** this is
+the clearest example in the whole session of the AI's own process
+having a recurring flaw that a single correction didn't actually fix -
+worth being direct about for Monday's discussion on maintenance, since
+"caught it once" and "fixed the underlying habit" turned out to be
+different things here.
+
 ## Template for the next entry
 
 ```

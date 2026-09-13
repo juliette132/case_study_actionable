@@ -143,32 +143,86 @@ don't appear here. That's correct for this table's purpose; they still
 exist
 untouched in `bronze.weather` for the weather-only gold aggregate.
 
-## Tier 3 — Gold (`analytics` dataset): aggregation
+## Tier 3 — Gold (`analytics` dataset): aggregation ✅ built and tested
 
-**Single-source aggregates (straightforward, build regardless of what
-follows):**
-- `analytics.daily_weather_summary` (from `bronze.weather`): per city per
-  day, avg/min/max temperature and humidity.
-- `analytics.air_quality_by_country` (from `bronze.air_quality`): per
-  country, avg AQI, count by category.
+**Single-source aggregates — not built.** `analytics.daily_weather_summary`
+and `analytics.air_quality_by_country` were in the original plan but were
+superseded by the choices below, which cover the actually-wanted combined
+analysis; noted here so this doc doesn't silently drop them without
+saying why.
 
-**The combined weather+air-quality metric — options, as requested.** All
-of these read from `silver.weather_air_quality`; pick one (or two — A is
-cheap enough to keep alongside whichever of B–E you also want):
+**The combined weather+air-quality metric — options considered:**
 
 | # | Approach | What it produces | Strengths | Weaknesses |
 |---|---|---|---|---|
 | **A** | Side-by-side summary | One row per city: temp and AQI next to each other, no blending | Zero subjective choices to defend; trivial to explain; good BI-table baseline | Not really a "combined metric" — just co-located numbers |
 | **B** | Composite comfort score | `100 - LEAST(ABS(temp_c - 21) * 2, 50) - LEAST(aqi_value * 0.3, 50)` — one 0-100 number per city | Strong single headline number for a demo ("Riyadh scores 12/100") | The weights/comfort-band are your own design choice — have a ready answer for "why these numbers" in the discussion, since it's the one place here that's genuinely arbitrary |
 | **C** | Statistical correlation | `CORR(temperature_c, aqi_value)` across matched cities — one number | Shows actual analytical thinking, not just a display metric; cheap to compute | ~40 data points is a thin sample for a correlation claim; be upfront that it's exploratory, not a finding, if asked |
-| **D** | Risk quadrant / bucket matrix | Cities bucketed by temperature band × the CSV's *existing* AQI Category (no new thresholds invented), counted per bucket | No arbitrary math to defend — reuses the source's own AQI bands; easy 3×N heatmap chart | Less of a single "story number" than B or E |
-| **E** | Combined-extremes leaderboard | `RANK() OVER (ORDER BY temperature_c DESC) + RANK() OVER (ORDER BY aqi_value DESC) AS combined_rank`, top N | Genuinely interesting narrative ("cities with both hot weather and bad air right now"), defensible because it's rank-based rather than a weighted formula | Ranks don't carry a magnitude — "how much worse", not just "worse than" |
+| **D** | Risk quadrant / bucket matrix | Cities bucketed by temperature band × the CSV's *existing* AQI Category (no new thresholds invented), counted per bucket | No arbitrary math to defend — reuses the source's own AQI bands; easy 3×N heatmap chart | Less of a single "story number" |
 
-**Recommendation:** build **A** (nearly free) plus **E** (best
-story-to-effort ratio, no defensibility risk) as the actual gold output;
-mention **B**, **C**, **D** verbally as considered alternatives in the
-discussion if it comes up — that's a stronger answer than picking one
-metric and presenting it as the only reasonable choice.
+**Built: A and D**, plus a geographic-proximity analysis in place of the
+original option E (a `RANK()`-sum leaderboard, built, then **removed
+entirely** — both the SQL file and the BigQuery table — for not
+surfacing anything genuinely interesting; not kept as a discarded
+alternative in this doc, since there's nothing about it worth referencing
+later). B and C weren't built but are still worth mentioning verbally in
+the discussion as considered alternatives.
+
+**Test results (real data, run 2026-09-13):**
+- **A** (`city_environment_summary`): 40 rows, matches `silver`'s count
+  exactly. Top row by AQI is Seoul (421, "Hazardous") — consistent with
+  the same finding surfaced repeatedly while building silver.
+- **D** (`climate_air_quality_matrix`): bucket counts sum to exactly 40 —
+  no city lost or double-counted across the temperature×category grid.
+
+### Geographic proximity analysis (replaces the removed option E)
+
+**The question:** do cities near each other geographically tend to have
+similar air quality (and/or temperature), using each matched city's real
+latitude/longitude from `bronze.weather` and BigQuery's native
+`ST_DISTANCE`/`ST_GEOGPOINT` (not a hand-rolled haversine formula)?
+
+**Checked before building anything:** with only 40 mostly-capital cities
+worldwide, it wasn't obvious there'd be enough genuinely nearby pairs to
+say anything meaningful. Checked directly — there are real sub-500km
+pairs (Amsterdam–Brussels 173km, Geneva–Zurich 224km, Budapest–Prague
+444km, Doha–Dubai 379km), enough to proceed.
+
+**Two tables, answering this two ways:**
+- `analytics.nearest_city_comparison` (`sql/gold/nearest_city_comparison.sql`):
+  one row per city, its single nearest matched-city neighbor, the
+  distance, and the AQI/temperature difference between them. Chosen as
+  the "defensible" version — each of the 40 cities contributes exactly
+  one independent observation.
+- `analytics.distance_similarity_trend` (`sql/gold/distance_similarity_trend.sql`):
+  all 780 pairs (`C(40,2)`), bucketed by distance, with the average
+  AQI/temperature difference per band plus the overall correlation
+  coefficient across every pair. Explicitly documented in the SQL's own
+  comments that these 780 pairs are **not 780 independent observations**
+  (each city appears in 39 of them) — useful for eyeballing a trend, not
+  for a rigorous statistical claim.
+
+**The actual finding — a nuanced one, not a clean story:**
+- Average AQI difference rises with distance across all four bands: 53.4
+  (<1,000km) → 59.8 (1,000-4,000km) → 75.7 (4,000-8,000km) → 77.4
+  (>8,000km) — a real, monotonic trend.
+- But the overall Pearson correlation between distance and AQI difference
+  across all 780 pairs is only **0.021** — essentially no linear
+  relationship. The bucketed trend is real but weak, likely swamped by
+  how much AQI varies for reasons unrelated to geography (local traffic,
+  industry, weather-of-the-day) and by the closest band having only 32
+  pairs versus 433 in the farthest.
+- Temperature shows the same shape more clearly (3.7 → 7.9 → 10.2 → 8.8,
+  correlation 0.155) — a weak positive relationship, which makes physical
+  sense (regional climate), though still weak because this is one
+  instantaneous weather reading per city, not a climate normal.
+- **Honest conclusion for the discussion:** there is a real, physically
+  sensible tendency for nearby cities to share more similar conditions
+  than distant ones, for both AQI and temperature — but it's a weak
+  effect at this sample size (40 cities, mostly far-flung capitals), not
+  a strong pattern. That's a more defensible thing to present than either
+  overstating a "trend found!" headline or dismissing it because the
+  correlation coefficient alone looks unimpressive.
 
 ## Tooling options — this is the actual decision to make
 
