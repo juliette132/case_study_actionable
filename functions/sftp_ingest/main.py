@@ -129,6 +129,11 @@ def load_csv(client: bigquery.Client, project_id: str, file_bytes: bytes) -> int
         skip_leading_rows=1,
         autodetect=True,
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        # BigQuery's default (STRICT/V1) column-name rules reject headers
+        # with spaces, periods, etc. (e.g. "PM2.5 AQI Value") — real-world
+        # CSV headers routinely have these. V2 normalizes them instead of
+        # rejecting the load outright.
+        column_name_character_map="V2",
     )
     job = client.load_table_from_file(io.BytesIO(file_bytes), table_ref, job_config=job_config)
     job.result()  # blocks until done; raises google.api_core.exceptions.GoogleAPIError on failure
