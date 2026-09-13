@@ -10,8 +10,10 @@ GCP project: `case-study-act`.
 
 - [x] OpenWeatherMap API → BigQuery (`raw_data.import_weather`) — built, run
       once against the real project, see `docs/ai_usage_log.md` for details
-- [ ] SFTP CSVs → BigQuery — code built (`functions/sftp_ingest/`), untested:
-      no SFTPCloud account/dataset exists yet
+- [x] SFTP CSVs → BigQuery (`raw_data.import_csv_data`) — built and tested
+      against a real SFTPCloud instance with a real Kaggle CSV (23,463 rows,
+      the [Global Air Pollution dataset](https://www.kaggle.com/datasets/hasibalmuzdadid/global-air-pollution-dataset));
+      dedup-on-rerun verified live too
 - [ ] Deployed as scheduled Cloud Functions (currently local-only; deploy
       scripts are written and reviewed but not run, see `scripts/`)
 - [ ] Optional: bronze/silver/gold transform layer

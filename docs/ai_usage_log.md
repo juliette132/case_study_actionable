@@ -174,6 +174,40 @@ never written into any file in this repo or the scratchpad; it went
 directly from the conversation into Secret Manager and is referenced
 everywhere else in code/docs only by the secret's *name*, not its value.
 
+## 2026-09-13 (continued) — Real CSV loaded, second bug caught live
+
+**Context:** the user picked a Kaggle dataset
+([Global Air Pollution](https://www.kaggle.com/datasets/hasibalmuzdadid/global-air-pollution-dataset)),
+downloaded it, and gave the AI a local file path.
+
+**What the AI did:**
+- Wrote a one-off upload helper (not part of the repo/pipeline — the
+  pipeline only pulls) using the same paramiko credentials already verified,
+  and uploaded the CSV to the SFTPCloud instance directly, rather than
+  asking the user to do it manually through a GUI.
+- Ran the ingestion script against the real file.
+
+**Corrected — caught by running it, not by inspection:**
+- The load failed: `Field name 'PM2.5 AQI Value' is not supported by the
+  current character map`. BigQuery's default (STRICT/V1) column-naming
+  rules reject periods/spaces in autodetected CSV headers — a real dataset
+  with a real header like `PM2.5 AQI Value` hits this immediately, while
+  the earlier offline sanity-check payload never exercised a header with
+  unusual characters. Fixed by setting
+  `LoadJobConfig.column_name_character_map="V2"`, which normalizes invalid
+  characters (`PM2.5 AQI Value` → `PM2_5 AQI Value`) instead of rejecting
+  the load. Confirmed via a targeted web search of Google's own client
+  library docs before using the exact field name, not from memory.
+- Re-ran and confirmed: 23,463 rows loaded on the first pass, and a second
+  run correctly reported the file as `skipped_already_ingested` with zero
+  new rows — the content-hash dedup claim in `docs/architecture.md` is now
+  verified live, not just reasoned about.
+
+**Note on the credential handling pattern established earlier:** the SFTP
+password was reused here (read back from Secret Manager by the one-off
+upload script, not retyped or re-pasted), consistent with never having it
+live in a file.
+
 ## Template for the next entry
 
 ```

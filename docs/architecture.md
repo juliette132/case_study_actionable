@@ -5,7 +5,7 @@
 | Source | Auth | Status |
 |---|---|---|
 | OpenWeatherMap current-weather API | API key in Secret Manager | Built, tested against real GCP project |
-| SFTP server (CSV files) | password/key in Secret Manager (SFTPCloud) | Code built; untested — SFTP account not yet created |
+| SFTP server (CSV files) | password/key in Secret Manager (SFTPCloud) | Built, tested against real SFTPCloud instance + a real Kaggle CSV |
 
 Both land in BigQuery, in the `raw_data` dataset, in the same project (`case-study-act`).
 
