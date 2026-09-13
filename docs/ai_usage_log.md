@@ -549,6 +549,49 @@ dropped.
   instruction, and confirmed the materialized tables matched the
   ad-hoc verification queries exactly before committing anything.
 
+## 2026-09-13 (continued) — Repeated the branch-targeting mistake, then fixed it properly
+
+**Prompt:** *"i've noticed you are trying to commit gold branch into
+silver branch, silver branch into bronze, etc. Why? I only want 1 main
+branch and first commit the plan, then the bronze, then the silver, etc
+into main, not into each other"*
+
+**What happened:** the exact same mistake as PR #2 (branching a new
+tier's work off the previous tier's still-open branch, so its PR's base
+defaults to that branch instead of `main`) was repeated three more times
+in a row (plan→deploy-fixes, bronze→transform-layer-plan, silver→bronze,
+gold→silver) without being caught — and one of them, bronze into
+transform-layer-plan, was actually **merged** before the user caught it,
+meaning `main` was silently missing the entire transform layer. The
+underlying reason: each tier's work genuinely depended on files the
+previous tier had written (the plan doc, the bronze SQL) that didn't
+exist on `main` yet, so branching from the prior feature branch was the
+path of least resistance - but that's a reason the *files* needed to
+exist, not a reason the *PR* needed to target that branch instead of
+`main`.
+
+**How it was fixed, not just papered over:** rather than only retargeting
+PR bases (which would have still shown bundled, confusing diffs until
+each merged in order), rebuilt the four branches from scratch - backed up
+originals as `backup/*` branches first, then cherry-picked each tier's
+own commits onto a fresh branch built on top of the previous tier's
+already-correct state, in order (plan onto `main`, bronze onto the new
+plan branch, etc.). Confirmed byte-identical file content before pushing
+(`git diff backup/gold-layer gold-layer` - empty) so this was a pure
+history/ancestry fix, not a content change. Force-pushed all four,
+retargeted PRs #5/#7/#8 to `main`, and opened a new PR (#9) to properly
+land bronze since the original #6 had already merged into the wrong
+branch and couldn't be retargeted - the same recovery pattern used for
+the PR #2/#3 mistake, applied a second time because the underlying habit
+hadn't actually been fixed the first time, only that one instance of it.
+
+**Why this belongs in the log prominently, not as a footnote:** this is
+the clearest example in the whole session of the AI's own process
+having a recurring flaw that a single correction didn't actually fix -
+worth being direct about for Monday's discussion on maintenance, since
+"caught it once" and "fixed the underlying habit" turned out to be
+different things here.
+
 ## Template for the next entry
 
 ```
