@@ -79,12 +79,29 @@ not robust for any city added later without repeating that by hand.
 generically: it pulls **every distinct country name actually present** in
 `raw_data.import_csv_data` (175, not the ~40 originally guessed at) and
 resolves each to an ISO-2 code via `pycountry` (official ISO 3166 data),
-with 5 manual overrides for names `pycountry` doesn't match automatically
+with 7 manual overrides for names `pycountry` doesn't match automatically
 (e.g. `"Turkey"` — `pycountry`'s primary name is now `"Türkiye"` since a
-2022 rename; `"Bolivia (Plurinational State of)"` — a punctuation
-mismatch against the official long form). The script asserts zero
-unmatched names before loading, so a future country that fails to resolve
-is a loud build failure, not a silently wrong/missing mapping.
+2022 rename; `"Bolivia (Plurinational State of)"` — a punctuation mismatch
+against the official long form). The script asserts zero *unmatched*
+names before loading — but that alone wasn't enough:
+
+**A real, silent wrong-answer bug, found only by cross-checking silver's
+actual output, not by the build script's own assertion:** `pycountry`'s
+fuzzy-match fallback resolved `"Republic of Korea"` (South Korea) to
+**`KP` — North Korea's code.** No error, no warning; the build completed
+"successfully" with a confidently wrong entry. It surfaced only because
+Seoul silently disappeared from the silver join (39 matches instead of
+the expected 40) and got traced back one table at a time rather than
+accepted at face value. Fixed by moving that entry to
+`MANUAL_OVERRIDES` and, since one silent wrong answer means the whole
+fuzzy-match path is untrustworthy, auditing every other fuzzy-matched
+entry too (one more, `"State of Palestine"` → `PS`, was correct — moved
+to `MANUAL_OVERRIDES` anyway so the final table has **zero** entries
+resolved by unaudited fuzzy matching, not "zero known-bad" ones). This is
+the concrete reason the script now prints every fuzzy match for manual
+review instead of only failing loudly on a `None` result — "matched
+without erroring" and "matched correctly" turned out to be different
+claims.
 
 **This is a table, not a function — deliberately, after testing the
 alternative.** The original plan was a callable "macro-like" UDF wrapping
@@ -102,15 +119,28 @@ reused everywhere downstream. The UDF still exists
 (`sql/bronze/country_to_iso_udf.sql`) as a convenience for one-off console
 lookups, but the actual pipeline doesn't call it.
 
-## Tier 2 — Silver (`silver` dataset): the join, pruned to what gold needs
+## Tier 2 — Silver (`silver` dataset): the join, pruned to what gold needs ✅ built and tested
+
+SQL: `sql/silver/weather_air_quality.sql`.
 
 | Table | Built from | What it does |
 |---|---|---|
-| `silver.weather_air_quality` | `bronze.weather` (latest row per city) JOIN `bronze.air_quality` ON `city_key` AND mapped `country_key` | One row per matched city: `city_key`, `country_key`, `temperature_c`, `humidity_pct`, `weather_description`, `aqi_value` (now INT64), `aqi_category`. Drops everything else (raw ids, query strings, per-observation timestamps) — gold doesn't need them. |
+| `silver.weather_air_quality` | `bronze.weather` (latest row per city) JOIN `bronze.air_quality` ON `city_key` AND `country_key` | One row per matched city: `city_key`, `country_key`, `city_name`, `temperature_c`, `humidity_pct`, `weather_description`, `weather_observed_at`, `aqi_value` (INT64), `aqi_category`, `pm25_aqi_value`. Drops everything else (raw ids, query strings, per-observation history) — gold doesn't need them. |
+
+**Test results (real data, run 2026-09-13):** 40 matched cities — exactly
+the 43 in `WEATHER_LOCATIONS` minus the 3 with no real counterpart in the
+CSV (Berlin/DE, New York/US, Paris/FR — the same 3 identified back when
+`WEATHER_LOCATIONS` was first expanded). Explicitly re-checked that
+Berlin stays excluded (confirming the country-aware join still avoids the
+earlier false-positive-Berlin bug) and that São Paulo is now included
+(confirming the accent-normalization fix holds through the real build,
+not just the standalone query that found it). Zero duplicate
+`(city_key, country_key)` pairs in the output.
 
 This is an inner join by design — cities with no cross-source match
-(Paris, New York, and most of the original weather list) simply don't
-appear here. That's correct for this table's purpose; they still exist
+(Paris, New York, Berlin, and most of the CSV's 23,463 cities) simply
+don't appear here. That's correct for this table's purpose; they still
+exist
 untouched in `bronze.weather` for the weather-only gold aggregate.
 
 ## Tier 3 — Gold (`analytics` dataset): aggregation

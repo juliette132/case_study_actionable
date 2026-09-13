@@ -453,6 +453,38 @@ against 100 countries. If that assert hadn't been there, the pipeline
 would have silently loaded `NULL` for those countries' rows instead of
 failing to build.
 
+## 2026-09-13 (continued) — Silver join, and a wrong-not-missing bug
+
+**What the AI did:** built `silver.weather_air_quality` (the cross-source
+join) and ran it against the real bronze tables.
+
+**Corrected — a genuinely dangerous class of bug, not just a gap:**
+The first silver build returned 39 matched cities, one short of the
+expected 40. Investigated which city was missing (Seoul) rather than
+accepting "close enough." Traced to `bronze.country_code_map`: the
+build script's fuzzy-match fallback had resolved `"Republic of Korea"`
+to **`KP` — North Korea's ISO code** — silently, with no error, because
+the script only asserted on *unmatched* names, not on whether a match was
+*correct*. This is meaningfully worse than the missing-data cases found
+earlier (Lagos/Stockholm with `NULL` country): those are visible gaps;
+this was a confident wrong answer with the same "shape" as a correct one.
+Fixed by moving it to an explicit override, and then — since one silently
+wrong fuzzy match means the whole fuzzy-match path can't be trusted —
+auditing every other fuzzy-matched entry too, not just the one that
+happened to break something visible. One more (`"State of Palestine"` →
+`PS`) turned out correct, but was moved to an explicit override anyway,
+so the shipped table has zero entries resolved by an unaudited heuristic,
+rather than "zero currently-known-bad" ones.
+
+**Why this is the most important finding of the session, not just
+another bug:** every previous fix in this log was caught because
+something *failed visibly* (an error, a missing row, a 403). This one
+didn't fail at all — it produced a plausible, silently wrong output that
+would have shipped as correct if the row count hadn't been checked
+against an independently-known expected value. "The build succeeded" and
+"the build is correct" are different claims, and this is the one place
+in this whole exercise where that distinction was the entire finding.
+
 ## Template for the next entry
 
 ```
