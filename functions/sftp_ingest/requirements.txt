@@ -1,0 +1,4 @@
+functions-framework~=3.5
+google-cloud-bigquery~=3.25
+google-cloud-secret-manager~=2.20
+paramiko~=3.4
