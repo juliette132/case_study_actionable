@@ -239,6 +239,81 @@ overridden by a guardrail after a user's go-ahead* — worth being upfront
 about for Monday's discussion, rather than only showcasing the cases where
 correction happened cleanly before anything ran.
 
+## 2026-09-13 (continued) — First real deployment: 4 bugs no amount of review had caught
+
+**Prompt:** *"proceed with deployment"*, following an earlier explicit
+verification pass ("verify that all is ready for a live deployment") that
+had checked runtimes, APIs, quota, existing resources, and cross-referenced
+every gcloud/bq command against the installed CLI's own `--help` — and
+still missed all four of the following, because none of them are
+discoverable by reading the script; they only show up when the code
+actually runs against real infrastructure.
+
+**Housekeeping bug found first:** PR #2 had been stacked on PR #1's branch
+(`weather-ingestion`) rather than targeting `main` directly. PR #1 merged
+first, so the entire SFTP pipeline never reached `main`. Caught by
+diffing `origin/main` against what was expected, not assumed from PR
+state. Fixed with a follow-up PR (#3) from `weather-ingestion` straight
+into `main`.
+
+**Bug 1 — `bq add-iam-policy-binding` on a dataset:** returned "This
+feature requires allowlisting" live, despite being the syntax verified via
+web search earlier in the session (that search found *correct* syntax for
+a feature that turned out to be gated for this project — verifying syntax
+isn't the same as verifying availability). Fixed with
+`scripts/grant_dataset_access.py`, using the dataset's own
+access-control-list mechanism instead.
+
+**Bug 2 — `GCP_PROJECT_ID` not set at runtime:** a code comment (written
+earlier, never tested) claimed "Cloud Functions (2nd gen) sets
+GOOGLE_CLOUD_PROJECT automatically" — asserted from general Cloud
+Functions knowledge, not verified for this exact runtime, and wrong. The
+function crashed with `RuntimeError: Set GCP_PROJECT_ID...` on its first
+real invocation. Fixed by always passing it via `--set-env-vars`, and the
+false comment was corrected in the code, not just patched around.
+
+**Bug 3 — SFTP function missing project-level `bigquery.jobUser`:** the
+documented IAM design (dataset-scoped access only, no project-level roles)
+was reasoned through carefully for the weather function's streaming
+inserts, then assumed to transfer to the SFTP function's LOAD/QUERY jobs
+without checking that BigQuery jobs are a project-scoped resource with no
+dataset-scoped equivalent. Live 403 caught it; fixed by granting
+`roles/bigquery.jobUser` at the project level, and the architecture doc
+was corrected to explain *why* this one is necessarily broader, not just
+that it is.
+
+**Bug 4 — Git Bash/MSYS path mangling:** running the SFTP deploy script
+from Git Bash on Windows silently turned `SFTP_REMOTE_DIR=/` into
+`SFTP_REMOTE_DIR=C:/Program Files/Git/` (MSYS auto-converts bare `/`
+arguments before non-MSYS programs see them) — not something any code
+review would surface, only a live `gcloud functions describe` showing the
+deployed env var. First fix attempt (`MSYS_NO_PATHCONV=1`) made it worse —
+it broke gcloud's own bash launcher script, which needed its own internal
+path translation to keep working. Actually fixed by switching that one
+command to PowerShell, where this MSYS-specific behavior doesn't exist,
+and documented as a known gotcha in the script rather than "solved" with a
+fragile bash-side workaround.
+
+**A dead-end worth recording honestly:** attempting to manually test the
+deployed function by curling it directly (impersonating the service
+account to mint an identity token) failed twice, for two unrelated
+reasons (missing `Content-Length` header → 411; then a permission the
+AI's own account didn't have for service-account impersonation → empty
+token → 401) — neither of which was the actual bug. The useful signal
+came from a different approach entirely: reading Cloud Logging's request
+log for the underlying Cloud Run service directly, which showed the real
+crash. Abandoning the curl approach once it became a dead end, rather than
+continuing to debug a test harness instead of the actual system, is the
+part worth noting here.
+
+**What this entry is really documenting:** every one of these four bugs
+survived a real "verify before deploying" pass that included cross-checking
+CLI syntax against installed tool help output — a level of diligence beyond
+"just trust the docs." None of that substitutes for actually running the
+thing. That gap — between "reviewed and looks right" and "confirmed by a
+live run" — is the throughline of this whole session's log, not just this
+entry.
+
 ## Template for the next entry
 
 ```

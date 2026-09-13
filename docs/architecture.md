@@ -107,14 +107,32 @@ the source being files rather than a JSON API:
   Manager, never in code, env files committed to the repo, or the Cloud
   Function's source.
 - Each deployed function runs under its **own** service account (not the
-  default compute service account), granted only:
+  default compute service account), granted:
   - `roles/bigquery.dataEditor` scoped to the `raw_data` **dataset**, not the
-    project (create/update tables and insert rows — nothing else).
+    project (create/update tables and insert/stream data — nothing else).
+    Granted via the dataset's own access-control list
+    (`scripts/grant_dataset_access.py`), not `bq add-iam-policy-binding` —
+    that command returned "This feature requires allowlisting" on this
+    project; the ACL mechanism is the older, always-available equivalent.
   - `roles/secretmanager.secretAccessor` scoped to that function's **one**
     secret (`openweather-api-key`, or the SFTP password/key secret) — not
     the project, and not the other function's secret.
+  - **`sftp-ingest` only**: `roles/bigquery.jobUser` at the **project**
+    level — necessary, not a looser choice. This function runs `LOAD` and
+    `QUERY` jobs (the CSV load, and the content-hash dedup check); a
+    BigQuery Job is a project-scoped resource with no dataset-scoped
+    equivalent for `bigquery.jobs.create`, unlike `weather-ingest`'s plain
+    streaming inserts (`tabledata.insertAll`), which only need
+    dataset-level `dataEditor`. Confirmed live: without this,
+    `sftp-ingest` failed with `403 ... does not have
+    bigquery.jobs.create permission`.
 - Both functions are deployed with `--no-allow-unauthenticated`; only Cloud
   Scheduler's own service account (granted invoker rights) can call them.
+- **`GCP_PROJECT_ID` is passed explicitly via `--set-env-vars`/
+  `--update-env-vars` on both functions.** Despite Cloud Functions
+  docs/folklore suggesting `GOOGLE_CLOUD_PROJECT` is auto-populated on
+  gen2, a live deploy failed with a `RuntimeError` until it was set
+  explicitly — don't rely on that assumption.
 
 ## Monitoring
 
