@@ -485,6 +485,36 @@ against an independently-known expected value. "The build succeeded" and
 "the build is correct" are different claims, and this is the one place
 in this whole exercise where that distinction was the entire finding.
 
+## 2026-09-13 (continued) — Gold layer (A, D, E)
+
+**Prompt:** *"make sure the corrections are done in bronze layer rather
+than silver layer and proceed with gold option, make sure to walk through
+the logic once its completed"*
+
+**What the AI did:**
+- Verified (by grepping both SQL files, not by memory of having written
+  them correctly) that the country-key correction genuinely lives in
+  `sql/bronze/air_quality.sql`/`build_country_code_map.py`, and that
+  `sql/silver/weather_air_quality.sql` only reads already-resolved
+  columns — confirming the user's instruction was already satisfied
+  rather than assuming so.
+- Built all three previously-agreed gold tables (A: side-by-side summary,
+  D: temperature×AQI-category bucket matrix, E: combined-extremes rank)
+  and ran them against real silver data.
+
+**Verified rather than assumed:** each table's row/bucket-total count was
+checked against the known-correct silver count (40) to catch any row loss
+or duplication from the aggregation logic itself, not just checked for
+"did the query run." E's top result (Riyadh) was cross-checked against
+the same city's numbers surfaced earlier in the session by manual
+inspection, rather than trusting the ranking logic on faith because the
+query executed without error.
+
+**Not built:** the two single-source gold aggregates from the original
+plan (`daily_weather_summary`, `air_quality_by_country`) were superseded
+by the user's A/D/E choice — noted in the plan doc rather than silently
+dropped.
+
 ## Template for the next entry
 
 ```

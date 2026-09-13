@@ -143,18 +143,19 @@ don't appear here. That's correct for this table's purpose; they still
 exist
 untouched in `bronze.weather` for the weather-only gold aggregate.
 
-## Tier 3 — Gold (`analytics` dataset): aggregation
+## Tier 3 — Gold (`analytics` dataset): aggregation ✅ A, D, E built and tested
 
-**Single-source aggregates (straightforward, build regardless of what
-follows):**
-- `analytics.daily_weather_summary` (from `bronze.weather`): per city per
-  day, avg/min/max temperature and humidity.
-- `analytics.air_quality_by_country` (from `bronze.air_quality`): per
-  country, avg AQI, count by category.
+**Single-source aggregates — not built.** `analytics.daily_weather_summary`
+and `analytics.air_quality_by_country` were in the original plan but were
+superseded by the user's choice of A/D/E below, which cover the actually-
+wanted combined analysis; noted here so this doc doesn't silently drop
+them without saying why.
 
-**The combined weather+air-quality metric — options, as requested.** All
-of these read from `silver.weather_air_quality`; pick one (or two — A is
-cheap enough to keep alongside whichever of B–E you also want):
+**The combined weather+air-quality metric — options, as originally laid
+out below, with A/D/E selected and built.** All three read from
+`silver.weather_air_quality`. SQL: `sql/gold/city_environment_summary.sql`,
+`sql/gold/climate_air_quality_matrix.sql`,
+`sql/gold/extreme_conditions_ranking.sql`.
 
 | # | Approach | What it produces | Strengths | Weaknesses |
 |---|---|---|---|---|
@@ -164,11 +165,20 @@ cheap enough to keep alongside whichever of B–E you also want):
 | **D** | Risk quadrant / bucket matrix | Cities bucketed by temperature band × the CSV's *existing* AQI Category (no new thresholds invented), counted per bucket | No arbitrary math to defend — reuses the source's own AQI bands; easy 3×N heatmap chart | Less of a single "story number" than B or E |
 | **E** | Combined-extremes leaderboard | `RANK() OVER (ORDER BY temperature_c DESC) + RANK() OVER (ORDER BY aqi_value DESC) AS combined_rank`, top N | Genuinely interesting narrative ("cities with both hot weather and bad air right now"), defensible because it's rank-based rather than a weighted formula | Ranks don't carry a magnitude — "how much worse", not just "worse than" |
 
-**Recommendation:** build **A** (nearly free) plus **E** (best
-story-to-effort ratio, no defensibility risk) as the actual gold output;
-mention **B**, **C**, **D** verbally as considered alternatives in the
-discussion if it comes up — that's a stronger answer than picking one
-metric and presenting it as the only reasonable choice.
+**Chosen: A, D, and E** (not the original A+E recommendation — B and C are
+still worth mentioning verbally as considered alternatives if it comes up
+in the discussion).
+
+**Test results (real data, run 2026-09-13):**
+- **A** (`city_environment_summary`): 40 rows, matches `silver`'s count
+  exactly. Top row by AQI is Seoul (421, "Hazardous") — consistent with
+  the same finding surfaced repeatedly while building silver.
+- **D** (`climate_air_quality_matrix`): bucket counts sum to exactly 40 —
+  no city lost or double-counted across the temperature×category grid.
+- **E** (`extreme_conditions_ranking`): Riyadh comes out `combined_rank`
+  1 (temp_rank 1 at 42.68°C, aqi_rank 4, "Unhealthy") — matches the
+  intuitive "hot + polluted" case found earlier while manually inspecting
+  the data, now produced by the actual ranking logic rather than eyeballed.
 
 ## Tooling options — this is the actual decision to make
 
