@@ -96,6 +96,149 @@ Secret Manager → BigQuery script).
   were only used in this session to authenticate and to inspect/query
   existing resources, not to deploy anything.
 
+## 2026-09-13 (continued) — GitHub workflow, SFTP ingestion script
+
+**Prompts, close to verbatim:**
+1. *"no, i want you to follow a teamwork style; keep separate branches,
+   expect PRs for merges; set u^a github ruleset for the repo that
+   disallows merging into main without a pr"*
+2. *"whats next? help me plan out the next steps of the assignement"*, then,
+   answering follow-up questions: SFTP account not started yet; hold off on
+   actually running deploy commands, prepare them for review instead.
+
+**What the AI produced or did:**
+- Installed the GitHub CLI (`gh`), authenticated it, pushed
+  `weather-ingestion`, and opened PR #1 into `main`.
+- Attempted a GitHub repository ruleset requiring PRs into `main` — blocked
+  by GitHub: rulesets (and, tried as a fallback, classic branch protection)
+  are Pro-only for private repos on a free personal account. Surfaced this
+  as an explicit choice rather than silently picking one; the user chose to
+  make the repo **public** to unlock it. Ruleset created and confirmed
+  active via the API response.
+- Attempted to verify the ruleset with a live direct push to `main` — this
+  specific action was blocked by Claude Code's own safety layer (flagged as
+  a "CI bypass" pattern) before it reached GitHub. Not worked around;
+  reported to the user as-is. The ruleset's active state was still
+  confirmed from the creation API response.
+- `functions/sftp_ingest/main.py`: lists CSVs on an SFTP server, dedups by
+  SHA-256 content hash against a `_ingested_files` control table, and loads
+  new files into BigQuery via a `LOAD` job with `autodetect=True` (BigQuery's
+  own CSV parser, not a hand-rolled one).
+- `scripts/deploy_weather.sh` / `scripts/deploy_sftp.sh`: turned the
+  previously-inline `docs/architecture.md` deploy commands into actual
+  scripts, per the user's choice to review before any deploy runs.
+
+**Trusted as-is:**
+- The `paramiko` connection/key-loading pattern and the BigQuery `LOAD` job
+  API usage — standard, well-documented library usage, not exercised against
+  a real SFTP server in this session (none exists yet).
+
+**Corrected / questioned:**
+- Nothing was silently worked around when blocked (the ruleset's plan
+  restriction, the direct-push test) — both were surfaced to the user with
+  the actual tradeoff/reason rather than the AI picking a path unasked.
+
+**Not yet independently verified:**
+- `functions/sftp_ingest/main.py` compiles and imports cleanly and its
+  hashing/control-table logic was reasoned through, but the actual SFTP
+  connection and CSV load path have not been exercised against a real
+  server — there's no SFTP account yet to test against.
+
+## 2026-09-13 (continued) — First live SFTP connection test
+
+**Context:** the user created an SFTPCloud instance (`cozy-penguin`,
+`eu-west-1.sftpcloud.io`) and pasted its host/username/password directly
+into chat.
+
+**What the AI did:**
+- Created the `sftp-password` secret in Secret Manager by piping the value
+  straight into `gcloud secrets create ... --data-file=-`, so the plaintext
+  never touched a file on disk.
+- Ran `functions/sftp_ingest/main.py` against the real instance.
+
+**Corrected — caught by running it, not by inspection:**
+- First attempt failed authentication entirely. Root cause: piping a string
+  to a native command's stdin in PowerShell (`"x" | gcloud ... --data-file=-`)
+  appends a trailing newline, so the stored secret was the password plus
+  `\n`, not the exact password the user provided. Fixed by writing the
+  value to a temp file with `[System.IO.File]::WriteAllText` (which adds no
+  trailing newline), adding it as a new secret version via
+  `--data-file=<path>`, then deleting the temp file. Re-running confirmed
+  authentication, SFTP listing, and the BigQuery control-table setup all
+  work end-to-end — only 0 files were found, expected since no CSV has
+  been uploaded to the instance yet.
+
+**Note on handling the credential itself:** the raw password appeared in
+the user's chat message (unavoidable — that's how it was shared) but was
+never written into any file in this repo or the scratchpad; it went
+directly from the conversation into Secret Manager and is referenced
+everywhere else in code/docs only by the secret's *name*, not its value.
+
+## 2026-09-13 (continued) — Real CSV loaded, second bug caught live
+
+**Context:** the user picked a Kaggle dataset
+([Global Air Pollution](https://www.kaggle.com/datasets/hasibalmuzdadid/global-air-pollution-dataset)),
+downloaded it, and gave the AI a local file path.
+
+**What the AI did:**
+- Wrote a one-off upload helper (not part of the repo/pipeline — the
+  pipeline only pulls) using the same paramiko credentials already verified,
+  and uploaded the CSV to the SFTPCloud instance directly, rather than
+  asking the user to do it manually through a GUI.
+- Ran the ingestion script against the real file.
+
+**Corrected — caught by running it, not by inspection:**
+- The load failed: `Field name 'PM2.5 AQI Value' is not supported by the
+  current character map`. BigQuery's default (STRICT/V1) column-naming
+  rules reject periods/spaces in autodetected CSV headers — a real dataset
+  with a real header like `PM2.5 AQI Value` hits this immediately, while
+  the earlier offline sanity-check payload never exercised a header with
+  unusual characters. Fixed by setting
+  `LoadJobConfig.column_name_character_map="V2"`, which normalizes invalid
+  characters (`PM2.5 AQI Value` → `PM2_5 AQI Value`) instead of rejecting
+  the load. Confirmed via a targeted web search of Google's own client
+  library docs before using the exact field name, not from memory.
+- Re-ran and confirmed: 23,463 rows loaded on the first pass, and a second
+  run correctly reported the file as `skipped_already_ingested` with zero
+  new rows — the content-hash dedup claim in `docs/architecture.md` is now
+  verified live, not just reasoned about.
+
+**Note on the credential handling pattern established earlier:** the SFTP
+password was reused here (read back from Secret Manager by the one-off
+upload script, not retyped or re-pasted), consistent with never having it
+live in a file.
+
+## 2026-09-13 (continued) — A judgment call the AI got wrong, caught by a guardrail
+
+**What happened:** asked to fill in `scripts/deploy_sftp.sh`'s placeholders
+with the real SFTP host/username (having already flagged, and gotten
+agreement, that the password itself would stay in Secret Manager), the AI
+did so and attempted to commit it. Claude Code's own safety layer blocked
+the commit, flagging the username (an opaque hex token) as credential-shaped
+content being committed to a now-**public** repository.
+
+**This was the right call, not an obstacle to route around.** On
+reflection, "the password isn't in it" was the wrong bar — an
+account-identifying token shouldn't be committed to a public repo either,
+independent of whether it's exploitable alone (minimizing exposed surface,
+not aiding brute-force/credential-stuffing attempts, not revealing account
+existence). The AI had already reasoned about this exact tradeoff two
+messages earlier when deciding *not* to hardcode these values, then
+proceeded to do it anyway once the user said "proceed" to a related but
+narrower question (filling in placeholders) — a real lapse, not a
+prompt-injection or adversarial scenario.
+
+**Fix:** reverted to placeholders, changed to be overridable via
+environment variables (`"${SFTP_HOST:-CHANGE_ME...}"`) at run time instead
+of hardcoded in the committed file, so nothing real needs to be checked in
+at all.
+
+**Why this belongs in the log specifically:** it's a concrete example of
+the AI's own output being *not just corrected on the code-review pass but
+overridden by a guardrail after a user's go-ahead* — worth being upfront
+about for Monday's discussion, rather than only showcasing the cases where
+correction happened cleanly before anything ran.
+
 ## Template for the next entry
 
 ```
