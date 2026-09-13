@@ -314,6 +314,28 @@ thing. That gap — between "reviewed and looks right" and "confirmed by a
 live run" — is the throughline of this whole session's log, not just this
 entry.
 
+## 2026-09-13 (continued) — Transform layer planning
+
+**Prompt:** *"proceed with the planning phase of the extension; lay out
+the necessary tools and expansions to achieve each tier"* — the optional
+bronze/silver/gold stretch goal.
+
+**What the AI did:** wrote `docs/transform_layer_plan.md` — planning only,
+nothing built. Laid out silver/gold table designs and two tooling options
+(BigQuery Scheduled Queries vs. Dataform, the latter already having its
+API enabled on this project), with a recommendation driven by the Monday
+deadline rather than by which is "better" in the abstract.
+
+**Verified rather than assumed:** the plan's draft included a proposed
+cross-source gold table joining weather and air-quality data by city name.
+Before writing that up as a real recommendation, ran the actual join
+against the real data instead of assuming it would work. Result: the CSV
+contains multiple same-named cities worldwide (a "Paris" in the US, a
+"Berlin" in El Salvador) — joining on city+country against the real
+target locations returned exactly one match (London, GB), not enough to
+be a meaningful demo table. The plan documents this finding and drops the
+table rather than presenting an untested idea as a good one.
+
 ## Template for the next entry
 
 ```
