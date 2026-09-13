@@ -515,6 +515,40 @@ plan (`daily_weather_summary`, `air_quality_by_country`) were superseded
 by the user's A/D/E choice — noted in the plan doc rather than silently
 dropped.
 
+## 2026-09-13 (continued) — Replaced option E with a geographic analysis
+
+**Prompts:**
+1. *"i don't like option E, it doesn't actually pull any interesting
+   conclusions. can you instead compare locations with the longitude and
+   latitude of the weather data and the air quality data? see if there is
+   a trend for cities nearby each other"*
+2. *"once you are done, run the code once to see if it creates the right
+   tables in big query, then create a PR for me to check"*
+3. *"get rid of option e altogether"*
+
+**What the AI did:**
+- Checked feasibility before designing anything: with only 40 mostly
+  world-capital cities, verified there were actually enough nearby pairs
+  (via a real `ST_DISTANCE` query) to make a proximity analysis
+  worthwhile, rather than assuming it would work out.
+- Built two tables answering the proximity question two ways: one row
+  per city (statistically defensible, 40 independent observations) and
+  the full 780-pair breakdown (useful for eyeballing a trend, explicitly
+  documented as non-independent observations in its own SQL comments).
+- Found and reported a genuinely nuanced result rather than forcing a
+  clean headline: AQI similarity does rise with distance across
+  bucketed averages (a real trend), but the overall linear correlation is
+  ~0 (0.021) - the trend exists but is weak, and the doc says so plainly
+  instead of picking whichever framing sounds more impressive.
+- Removed option E completely on request - deleted the SQL file, dropped
+  the live BigQuery table, and rewrote the plan doc's Tier 3 section to
+  describe only what was actually built, rather than leaving E as a
+  struck-through "considered and discarded" entry with no future
+  reference value.
+- Ran every new table for real against BigQuery per the explicit
+  instruction, and confirmed the materialized tables matched the
+  ad-hoc verification queries exactly before committing anything.
+
 ## Template for the next entry
 
 ```
