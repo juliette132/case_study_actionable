@@ -37,7 +37,24 @@ SECRET_NAME = os.environ.get("OPENWEATHER_SECRET_NAME", "openweather-api-key")
 SECRET_VERSION = os.environ.get("OPENWEATHER_SECRET_VERSION", "latest")
 BQ_DATASET = os.environ.get("BQ_DATASET", "raw_data")
 BQ_TABLE = os.environ.get("BQ_WEATHER_TABLE", "import_weather")
-DEFAULT_LOCATIONS = "Paris,FR;London,GB;New York,US;Berlin,DE"
+# Original 4 plus 39 more chosen specifically to overlap with the SFTP
+# air-quality CSV (raw_data.import_csv_data), enabling a cross-source gold
+# table (see docs/transform_layer_plan.md). Every entry here was checked
+# two ways before being added: (1) it has a correct city+country match in
+# the CSV - not just a same-named decoy elsewhere (e.g. the CSV's "Paris"
+# is in the US, its "Berlin" is in El Salvador - neither is usable) - and
+# (2) it was called live against the real OpenWeatherMap API and returned
+# the expected city/country, not assumed to resolve correctly.
+DEFAULT_LOCATIONS = (
+    "Paris,FR;London,GB;New York,US;Berlin,DE;"
+    "Amsterdam,NL;Bangkok,TH;Brussels,BE;Budapest,HU;Cairo,EG;Dubai,AE;"
+    "Helsinki,FI;Istanbul,TR;Jakarta,ID;Lisbon,PT;Nairobi,KE;Oslo,NO;"
+    "Prague,CZ;Seoul,KR;Singapore,SG;Sydney,AU;Tokyo,JP;Toronto,CA;"
+    "Warsaw,PL;Accra,GH;Auckland,NZ;Bogota,CO;Cape Town,ZA;Casablanca,MA;"
+    "Chicago,US;Doha,QA;Geneva,CH;Hanoi,VN;Johannesburg,ZA;Kuala Lumpur,MY;"
+    "Lima,PE;Los Angeles,US;Manila,PH;Reykjavik,IS;Riyadh,SA;Sao Paulo,BR;"
+    "Shanghai,CN;Wellington,NZ;Zurich,CH"
+)
 WEATHER_LOCATIONS = os.environ.get("WEATHER_LOCATIONS", DEFAULT_LOCATIONS)
 
 OPENWEATHER_URL = "https://api.openweathermap.org/data/2.5/weather"
