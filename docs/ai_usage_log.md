@@ -208,6 +208,37 @@ password was reused here (read back from Secret Manager by the one-off
 upload script, not retyped or re-pasted), consistent with never having it
 live in a file.
 
+## 2026-09-13 (continued) — A judgment call the AI got wrong, caught by a guardrail
+
+**What happened:** asked to fill in `scripts/deploy_sftp.sh`'s placeholders
+with the real SFTP host/username (having already flagged, and gotten
+agreement, that the password itself would stay in Secret Manager), the AI
+did so and attempted to commit it. Claude Code's own safety layer blocked
+the commit, flagging the username (an opaque hex token) as credential-shaped
+content being committed to a now-**public** repository.
+
+**This was the right call, not an obstacle to route around.** On
+reflection, "the password isn't in it" was the wrong bar — an
+account-identifying token shouldn't be committed to a public repo either,
+independent of whether it's exploitable alone (minimizing exposed surface,
+not aiding brute-force/credential-stuffing attempts, not revealing account
+existence). The AI had already reasoned about this exact tradeoff two
+messages earlier when deciding *not* to hardcode these values, then
+proceeded to do it anyway once the user said "proceed" to a related but
+narrower question (filling in placeholders) — a real lapse, not a
+prompt-injection or adversarial scenario.
+
+**Fix:** reverted to placeholders, changed to be overridable via
+environment variables (`"${SFTP_HOST:-CHANGE_ME...}"`) at run time instead
+of hardcoded in the committed file, so nothing real needs to be checked in
+at all.
+
+**Why this belongs in the log specifically:** it's a concrete example of
+the AI's own output being *not just corrected on the code-review pass but
+overridden by a guardrail after a user's go-ahead* — worth being upfront
+about for Monday's discussion, rather than only showcasing the cases where
+correction happened cleanly before anything ran.
+
 ## Template for the next entry
 
 ```
