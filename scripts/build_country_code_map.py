@@ -39,6 +39,14 @@ MANUAL_OVERRIDES = {
     "Iran (Islamic Republic of)": "IR",
     "Turkey": "TR",  # pycountry's current primary name is "Türkiye" (2022 rename)
     "Venezuela (Bolivarian Republic of)": "VE",
+    # Found by auditing fuzzy-match output, not by an assertion failing:
+    # search_fuzzy("Republic of Korea") returned KP (North Korea) instead
+    # of KR (South Korea) - word-overlap fuzzy matching confidently picked
+    # the wrong one, with no error raised. Confirmed via the actual
+    # silver-layer join silently dropping Seoul before this was caught.
+    "Republic of Korea": "KR",
+    "State of Palestine": "PS",  # correct as fuzzy-matched, moved here anyway
+    # so zero entries in the final table depend on an unaudited heuristic
 }
 
 SCHEMA = [
@@ -60,6 +68,7 @@ def build_mapping(client: bigquery.Client) -> dict[str, str]:
     names = [r["Country"] for r in rows]
 
     mapping: dict[str, str | None] = {}
+    fuzzy_matches: list[tuple[str, str]] = []  # (name, resolved iso) - needs a human to eyeball these
     for name in names:
         if name in MANUAL_OVERRIDES:
             mapping[name] = MANUAL_OVERRIDES[name]
@@ -70,6 +79,8 @@ def build_mapping(client: bigquery.Client) -> dict[str, str]:
             try:
                 results = pycountry.countries.search_fuzzy(name)
                 mapping[name] = results[0].alpha_2 if results else None
+                if mapping[name]:
+                    fuzzy_matches.append((name, mapping[name]))
             except LookupError:
                 mapping[name] = None
 
@@ -78,6 +89,20 @@ def build_mapping(client: bigquery.Client) -> dict[str, str]:
         raise RuntimeError(
             f"{len(unmatched)} country name(s) didn't resolve, add to MANUAL_OVERRIDES: {unmatched}"
         )
+
+    if fuzzy_matches:
+        print(
+            f"\n{len(fuzzy_matches)} name(s) matched only via fuzzy search, not an "
+            "exact lookup - these are NOT verified correct, just non-null. A fuzzy "
+            'match confidently returning the WRONG country (found live: "Republic '
+            'of Korea" -> KP, North Korea\'s code, instead of KR) is worse than an '
+            "unmatched name, because nothing here flags it as an error. Eyeball "
+            "every line below before trusting this table:"
+        )
+        for name, iso in fuzzy_matches:
+            country = pycountry.countries.get(alpha_2=iso)
+            print(f"  {name!r} -> {iso} ({country.name if country else '?'})")
+
     return mapping  # type: ignore[return-value]
 
 
