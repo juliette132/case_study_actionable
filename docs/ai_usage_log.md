@@ -96,6 +96,54 @@ Secret Manager → BigQuery script).
   were only used in this session to authenticate and to inspect/query
   existing resources, not to deploy anything.
 
+## 2026-09-13 (continued) — GitHub workflow, SFTP ingestion script
+
+**Prompts, close to verbatim:**
+1. *"no, i want you to follow a teamwork style; keep separate branches,
+   expect PRs for merges; set u^a github ruleset for the repo that
+   disallows merging into main without a pr"*
+2. *"whats next? help me plan out the next steps of the assignement"*, then,
+   answering follow-up questions: SFTP account not started yet; hold off on
+   actually running deploy commands, prepare them for review instead.
+
+**What the AI produced or did:**
+- Installed the GitHub CLI (`gh`), authenticated it, pushed
+  `weather-ingestion`, and opened PR #1 into `main`.
+- Attempted a GitHub repository ruleset requiring PRs into `main` — blocked
+  by GitHub: rulesets (and, tried as a fallback, classic branch protection)
+  are Pro-only for private repos on a free personal account. Surfaced this
+  as an explicit choice rather than silently picking one; the user chose to
+  make the repo **public** to unlock it. Ruleset created and confirmed
+  active via the API response.
+- Attempted to verify the ruleset with a live direct push to `main` — this
+  specific action was blocked by Claude Code's own safety layer (flagged as
+  a "CI bypass" pattern) before it reached GitHub. Not worked around;
+  reported to the user as-is. The ruleset's active state was still
+  confirmed from the creation API response.
+- `functions/sftp_ingest/main.py`: lists CSVs on an SFTP server, dedups by
+  SHA-256 content hash against a `_ingested_files` control table, and loads
+  new files into BigQuery via a `LOAD` job with `autodetect=True` (BigQuery's
+  own CSV parser, not a hand-rolled one).
+- `scripts/deploy_weather.sh` / `scripts/deploy_sftp.sh`: turned the
+  previously-inline `docs/architecture.md` deploy commands into actual
+  scripts, per the user's choice to review before any deploy runs.
+
+**Trusted as-is:**
+- The `paramiko` connection/key-loading pattern and the BigQuery `LOAD` job
+  API usage — standard, well-documented library usage, not exercised against
+  a real SFTP server in this session (none exists yet).
+
+**Corrected / questioned:**
+- Nothing was silently worked around when blocked (the ruleset's plan
+  restriction, the direct-push test) — both were surfaced to the user with
+  the actual tradeoff/reason rather than the AI picking a path unasked.
+
+**Not yet independently verified:**
+- `functions/sftp_ingest/main.py` compiles and imports cleanly and its
+  hashing/control-table logic was reasoned through, but the actual SFTP
+  connection and CSV load path have not been exercised against a real
+  server — there's no SFTP account yet to test against.
+
 ## Template for the next entry
 
 ```

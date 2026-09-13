@@ -10,9 +10,10 @@ GCP project: `case-study-act`.
 
 - [x] OpenWeatherMap API → BigQuery (`raw_data.import_weather`) — built, run
       once against the real project, see `docs/ai_usage_log.md` for details
-- [ ] SFTP CSVs → BigQuery
-- [ ] Deployed as a scheduled Cloud Function (currently local-only; deploy
-      commands are documented but unexecuted, see `docs/architecture.md`)
+- [ ] SFTP CSVs → BigQuery — code built (`functions/sftp_ingest/`), untested:
+      no SFTPCloud account/dataset exists yet
+- [ ] Deployed as scheduled Cloud Functions (currently local-only; deploy
+      scripts are written and reviewed but not run, see `scripts/`)
 - [ ] Optional: bronze/silver/gold transform layer
 
 ## Repo layout
@@ -22,6 +23,12 @@ functions/
   weather_ingest/
     main.py            # ingestion logic + Cloud Function entry point
     requirements.txt
+  sftp_ingest/
+    main.py            # ingestion logic + Cloud Function entry point
+    requirements.txt
+scripts/
+  deploy_weather.sh      # gcloud deploy commands, reviewed, not yet run
+  deploy_sftp.sh          # same, for the SFTP function
 docs/
   architecture.md       # design rationale, IAM, deploy commands, roadmap
   ai_usage_log.md        # mandatory AI-usage documentation for the exercise
@@ -43,6 +50,9 @@ docs/
 - Access to the `case-study-act` GCP project (you need at least read access
   to the `openweather-api-key` secret and write access to the `raw_data`
   dataset — see `docs/architecture.md` for the precise IAM roles).
+- For the SFTP ingestion: an SFTP account (e.g. SFTPCloud) with a CSV file
+  uploaded, and its password or private key stored in Secret Manager — not
+  yet set up (see Status above).
 
 ## Running the weather ingestion locally
 
@@ -68,13 +78,30 @@ bq query --use_legacy_sql=false \
   "SELECT * FROM \`raw_data.import_weather\` ORDER BY ingested_at DESC LIMIT 20"
 ```
 
-## Deploying as a Cloud Function + Cloud Scheduler
+## Running the SFTP ingestion locally
 
-Not done yet. Commands are written out in `docs/architecture.md` (service
-account creation, least-privilege IAM bindings, `gcloud functions deploy`,
-Cloud Scheduler job) but haven't been run — review them against
-`gcloud functions deploy --help` before using, since they were documented
-rather than executed.
+Needs an SFTP account and a CSV file uploaded first (not yet set up — see
+Status above). Once `.env` has `SFTP_HOST`/`SFTP_USERNAME`/etc. filled in
+and the password or key stored in Secret Manager:
+
+```
+pip install -r functions/sftp_ingest/requirements.txt
+python functions/sftp_ingest/main.py
+```
+
+Lists CSV files in `SFTP_REMOTE_DIR`, skips any whose content hash is
+already recorded in `raw_data._ingested_files`, and loads the rest into
+`raw_data.import_csv_data` (schema auto-detected from the CSV header).
+
+## Deploying as Cloud Functions + Cloud Scheduler
+
+Not done yet. `scripts/deploy_weather.sh` and `scripts/deploy_sftp.sh`
+create each function's dedicated service account, scope its IAM to exactly
+the dataset/secret it needs, deploy the function
+(`--no-allow-unauthenticated`), and create its Cloud Scheduler job. Written
+and reviewed, not executed — review against `gcloud functions deploy --help`
+before running, and fill in the `SFTP_*` placeholders in
+`deploy_sftp.sh` once that account exists.
 
 ## Design notes
 

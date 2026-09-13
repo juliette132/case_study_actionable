@@ -5,7 +5,7 @@
 | Source | Auth | Status |
 |---|---|---|
 | OpenWeatherMap current-weather API | API key in Secret Manager | Built, tested against real GCP project |
-| SFTP server (CSV files) | TBD (SFTPCloud) | Not started |
+| SFTP server (CSV files) | password/key in Secret Manager (SFTPCloud) | Code built; untested — SFTP account not yet created |
 
 Both land in BigQuery, in the `raw_data` dataset, in the same project (`case-study-act`).
 
@@ -79,18 +79,42 @@ a transient network blip safe rather than duplicating data).
   should be set to retry on 5xx but not on 207 — a partial failure on one
   city is a data-quality signal to look at, not something blindly retried.
 
+## SFTP CSV ingestion design
+
+Same overall shape as the weather function (fetch → load → BigQuery,
+per-item error isolation, HTTP 200/207/500), with two differences forced by
+the source being files rather than a JSON API:
+
+- **Schema**: rather than hand-writing a schema for whatever CSV dataset
+  ends up on the SFTP server, the BigQuery load job runs with
+  `autodetect=True` — BigQuery's own CSV parser infers types from the
+  header and first rows. Simpler and more robust than reimplementing CSV
+  type inference, and means the script doesn't need to know the dataset
+  shape ahead of time.
+- **Idempotence**: a streaming API call has a natural per-row `insertId` to
+  dedup on; a file load job doesn't have an equivalent built in. Instead,
+  every file's SHA-256 content hash is looked up in a small control table
+  (`raw_data._ingested_files`, created on first run) before loading, and
+  recorded after a successful load. Re-running against files already seen —
+  by content, not just by name, so a re-uploaded identical file doesn't
+  reload either — is a no-op. This also naturally supports dropping new
+  files into the same SFTP directory over time: only the new ones get
+  loaded on each scheduled run.
+
 ## Security / IAM
 
-- The OpenWeatherMap key lives only in Secret Manager, never in code, env
-  files committed to the repo, or the Cloud Function's source.
-- The deployed function should run under its **own** service account (not
-  the default compute service account), granted only:
+- The OpenWeatherMap key and the SFTP password/key live only in Secret
+  Manager, never in code, env files committed to the repo, or the Cloud
+  Function's source.
+- Each deployed function runs under its **own** service account (not the
+  default compute service account), granted only:
   - `roles/bigquery.dataEditor` scoped to the `raw_data` **dataset**, not the
     project (create/update tables and insert rows — nothing else).
-  - `roles/secretmanager.secretAccessor` scoped to the
-    `openweather-api-key` **secret**, not the project.
-- The function itself is deployed with `--no-allow-unauthenticated`; only
-  Cloud Scheduler's own service account (granted invoker rights) can call it.
+  - `roles/secretmanager.secretAccessor` scoped to that function's **one**
+    secret (`openweather-api-key`, or the SFTP password/key secret) — not
+    the project, and not the other function's secret.
+- Both functions are deployed with `--no-allow-unauthenticated`; only Cloud
+  Scheduler's own service account (granted invoker rights) can call them.
 
 ## Monitoring
 
@@ -100,68 +124,38 @@ a transient network blip safe rather than duplicating data).
 - Cloud Scheduler's job history page shows run outcomes (success / failure
   code) at a glance — the cheapest possible "did today's ingestion happen"
   check.
+- For the SFTP source specifically, `raw_data._ingested_files` itself is a
+  free audit trail: which files came in, when, and how many rows each
+  produced — useful for "did we actually pick up today's file" without
+  digging through logs.
 - Suggested next step (not yet built): a log-based Cloud Monitoring alert on
-  a 500 response or on `bigquery_errors` being non-empty, notifying by email.
+  a 500 response or on `bigquery_errors`/`errors` being non-empty for either
+  function, notifying by email.
 
-## Deploying (documented here; not yet run from this repo)
+## Deploying
 
-These commands are written from the documented `gcloud` syntax but haven't
-been executed — the CLI was only installed/authenticated in this session to
-run and verify the ingestion script itself. Flag any flag/runtime-name drift
-against `gcloud functions deploy --help` before running for real.
+Deploy commands live in `scripts/deploy_weather.sh` and
+`scripts/deploy_sftp.sh` — reviewed and ready, but **not executed from this
+session** (deploying is a deliberate call to make once the code and IAM
+scoping have been read over, not something to run automatically). Each
+script creates its function's dedicated service account, scopes it to
+exactly the dataset/secret it needs, deploys the function
+(`--no-allow-unauthenticated`), and creates its Cloud Scheduler job. Flag any
+flag/runtime-name drift against `gcloud functions deploy --help` before
+running — they're written from documented syntax, not from a live deploy in
+this project.
 
-```bash
-# One-off: dedicated least-privilege service account for the function.
-gcloud iam service-accounts create weather-ingest-sa \
-  --display-name="Weather ingestion Cloud Function"
-
-# Dataset-scoped BigQuery access (not project-wide).
-bq add-iam-policy-binding \
-  --member="serviceAccount:weather-ingest-sa@case-study-act.iam.gserviceaccount.com" \
-  --role="roles/bigquery.dataEditor" \
-  case-study-act:raw_data
-
-# Secret-scoped Secret Manager access (not project-wide).
-gcloud secrets add-iam-policy-binding openweather-api-key \
-  --member="serviceAccount:weather-ingest-sa@case-study-act.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-
-# Deploy the function itself.
-gcloud functions deploy weather-ingest \
-  --gen2 \
-  --runtime=python312 \
-  --region=europe-west1 \
-  --source=functions/weather_ingest \
-  --entry-point=weather_ingest \
-  --trigger-http \
-  --no-allow-unauthenticated \
-  --service-account=weather-ingest-sa@case-study-act.iam.gserviceaccount.com
-
-# Let Cloud Scheduler invoke it.
-gcloud functions add-invoker-policy-binding weather-ingest \
-  --region=europe-west1 \
-  --member="serviceAccount:weather-ingest-sa@case-study-act.iam.gserviceaccount.com"
-
-# Schedule it (every hour, on the hour).
-gcloud scheduler jobs create http weather-ingest-schedule \
-  --location=europe-west1 \
-  --schedule="0 * * * *" \
-  --uri="$(gcloud functions describe weather-ingest --gen2 --region=europe-west1 --format='value(serviceConfig.uri)')" \
-  --http-method=POST \
-  --oidc-service-account-email=weather-ingest-sa@case-study-act.iam.gserviceaccount.com
-```
-
-Note: `europe-west1` is used above because the existing `raw_data` dataset
-is in the `EU` multi-region — keep the function/scheduler region and the
-BigQuery dataset location in the same geography to avoid cross-region
+`europe-west1` is used in both scripts because the existing `raw_data`
+dataset is in the `EU` multi-region — keep the function/scheduler region and
+the BigQuery dataset location in the same geography to avoid cross-region
 latency/egress.
 
 ## Roadmap
 
-1. SFTP/CSV ingestion, same pattern (Cloud Function + Scheduler), into its
-   own `raw_data` landing table.
-2. Deploy the weather function + Scheduler job for real (commands above),
-   confirm an end-to-end scheduled run.
+1. Set up the SFTPCloud account, pick a CSV dataset, upload it — the one
+   piece here that isn't a coding task.
+2. Run `scripts/deploy_weather.sh` and `scripts/deploy_sftp.sh` for real,
+   confirm an end-to-end scheduled run for both.
 3. If a transform layer is worth adding: promote `raw_response` into an
    append-only bronze table, add a scheduled query or view as the silver
    layer doing typed/deduplicated output, and a gold aggregate (e.g. daily
