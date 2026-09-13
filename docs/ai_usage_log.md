@@ -399,6 +399,60 @@ sources), each caught by actually running a query against real data
 immediately after writing it, not by getting either query right on the
 first try.
 
+## 2026-09-13 (continued) — Country-code dictionary, UDF-vs-table finding, bronze build
+
+**Prompts:**
+1. *"when you do the iso vs full name conversaions, I'd like you to use a
+   macro like function that will be called, int he format of a dictionary
+   ... I'd rather you use iso ... so we don't have to hand pick cities for
+   unambiguous cases."*
+2. *"alternatively, we could create a bigquery table with this information
+   of the 180 country name conversioans. Evaluate pros and cons and
+   suggest a decision"*
+3. *"explain the role of the udf"*
+4. *"proceed; stop between tier implementations for a live test and
+   review: run the tests give me a summary for review"*
+5. *"commit and proceed to silver"*, *"make sure to keep the documentation
+   up to date as zell"*
+
+**What the AI did:**
+- Built the requested "dictionary": `bronze.country_code_map`, populated
+  from the **real distinct country values in `raw_data.import_csv_data`**
+  (175 of them) via `pycountry`, not hand-typed from memory or scoped only
+  to the ~40 cities already in use — directly addressing "so we don't have
+  to hand pick cities for unambiguous cases."
+- Attempted the requested "macro-like function" wrapping that table as a
+  SQL UDF, then **tested it in the actual use case (bulk per-row
+  resolution) rather than just the happy-path scalar call**, and found it
+  doesn't work: two different BigQuery errors depending on whether it's
+  called in a JOIN condition or a SELECT list. Reported this to the user
+  with the exact error text before proposing an alternative, rather than
+  silently swapping the approach or asserting the function "should" work.
+- Built `bronze.weather` and `bronze.air_quality` for real (SQL saved to
+  `sql/bronze/`), ran 4 concrete tests against them (row-count/dedup
+  delta, zero remaining duplicate keys, a plausibility check on the typed
+  AQI values, and country-resolution coverage), and reported the results
+  — including the honest one that dedup actually removed 4 real weather
+  duplicates, which is evidence for a claim made earlier in
+  `docs/architecture.md` ("insertId dedup is best-effort, not
+  guaranteed") that had until now only been asserted, not observed.
+
+**Corrected — caught by testing the actual use case, not the easy one:**
+The UDF-wrapping-a-table pattern looked correct after its first test
+(`SELECT bronze.country_to_iso('France')` worked). It was only proven
+wrong by testing it the way it would actually be used — per-row, against
+a table, inside a join — which is precisely the gap between "looks right"
+and "confirmed by a live run" this whole log keeps coming back to.
+
+**A small thing worth being honest about:** two manual overrides in
+`build_country_code_map.py` (`"Turkey"`, `"Venezuela (Bolivarian Republic
+of)"`) were only found because an `assert` in the script failed loudly on
+the first run against the real (175-country) list — an earlier, smaller
+check based on a flawed local CSV export had only surfaced 3 overrides
+against 100 countries. If that assert hadn't been there, the pipeline
+would have silently loaded `NULL` for those countries' rows instead of
+failing to build.
+
 ## Template for the next entry
 
 ```
