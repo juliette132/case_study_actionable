@@ -4,7 +4,9 @@
 -- reuse the source CSV's own "AQI Category" values directly rather than
 -- inventing new AQI thresholds, so there's one fewer arbitrary choice to
 -- defend than option B (the composite score) would have needed.
-CREATE OR REPLACE TABLE analytics.climate_air_quality_matrix AS
+--
+-- A VIEW, not a table (see city_environment_summary.sql for why).
+CREATE OR REPLACE VIEW analytics.climate_air_quality_matrix AS
 SELECT
   CASE
     WHEN temperature_c < 15 THEN 'Cold (<15C)'

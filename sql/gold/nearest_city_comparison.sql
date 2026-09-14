@@ -8,7 +8,11 @@
 -- have the "40 cities produce 780 non-independent pairs" statistical
 -- issue - see distance_similarity_trend.sql for the pairwise version and
 -- its caveat.
-CREATE OR REPLACE TABLE analytics.nearest_city_comparison AS
+--
+-- A VIEW, not a table (see city_environment_summary.sql for why). The
+-- self cross-join + ST_DISTANCE over 40 cities (~1,560 pairs) is trivial
+-- to recompute per query - not a reason to materialize this.
+CREATE OR REPLACE VIEW analytics.nearest_city_comparison AS
 WITH cities AS (
   SELECT s.city_key, s.city_name, s.country_key, s.aqi_value, s.temperature_c,
          w.latitude, w.longitude

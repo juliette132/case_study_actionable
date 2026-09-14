@@ -1,0 +1,56 @@
+# Documentation-only schema reference for bronze.air_quality (built by
+# air_quality.sql). Not read by any tooling - see weather.schema.yaml for
+# why this file exists. Pulled from the real deployed table
+# (`bq show --schema`), not hand-typed from the query.
+table: bronze.air_quality
+description: >
+  Normalized, typed, deduplicated air-quality readings from the SFTP CSV
+  source. One row per (city_key, country_key) - see the "dedup caveat" in
+  air_quality.sql for why the CSV's single-snapshot nature makes this
+  simpler than it would be for a recurring feed.
+columns:
+  - name: city_name
+    type: STRING
+    description: City name as it appears in the source CSV (original casing/spelling).
+  - name: city_key
+    type: STRING
+    description: Accent-stripped, lowercased city_name - join key against bronze.weather.
+  - name: country_name
+    type: STRING
+    description: Full English country name as it appears in the source CSV.
+  - name: country_key
+    type: STRING
+    description: >
+      ISO 3166-1 alpha-2 code, resolved via bronze.country_code_map
+      (built by scripts/build_country_code_map.py) - NOT derived from
+      country_name by a simple transform, since the CSV uses full names
+      and weather uses ISO codes.
+  - name: aqi_value
+    type: INTEGER
+    description: Overall AQI. SAFE_CAST from the source CSV's STRING column.
+  - name: aqi_category
+    type: STRING
+    description: e.g. "Good", "Moderate", "Unhealthy" - the CSV's own category, not a reinvented one.
+  - name: co_aqi_value
+    type: INTEGER
+  - name: co_aqi_category
+    type: STRING
+  - name: ozone_aqi_value
+    type: INTEGER
+  - name: ozone_aqi_category
+    type: STRING
+  - name: no2_aqi_value
+    type: INTEGER
+  - name: no2_aqi_category
+    type: STRING
+  - name: pm25_aqi_value
+    type: INTEGER
+  - name: pm25_aqi_category
+    type: STRING
+  - name: _updated_at
+    type: TIMESTAMP
+    description: >
+      When this bronze table was last rebuilt by the pipeline. This
+      table has no per-row ingestion timestamp of its own (see the dedup
+      caveat above), so this is the only freshness signal available for
+      it. Internal/metadata column, hence the underscore prefix.

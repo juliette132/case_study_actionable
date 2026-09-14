@@ -17,26 +17,59 @@ don't just skim once.
   what was produced, and specifically **where output was trusted as-is
   vs. corrected** — the corrections matter more than the successes.
 
+## Planning / approval workflow
+
+**Don't create new files without approval first.** When a task calls for
+something new (a script, a config, a new doc), present the idea and the
+realistic options for it — with tradeoffs, like any other design decision
+in this project — and let the user pick before writing anything. This is
+separate from editing files that already exist: making a direct,
+already-decided correction to existing code/docs (the user says exactly
+what's wrong and what to do about it) doesn't need this gate — it's new,
+not-yet-decided files/artifacts that do.
+
+**When testing/deploying something and it fails repeatedly, don't just
+keep fixing and re-running through the whole chain unattended.** Collect
+a few issues/fixes as they come up, then stop and report them as a
+checkpoint before continuing to the next batch — so the user can confirm
+the direction is still right rather than finding out about five stacked
+fixes only at the end. (This was written after debugging the pipeline
+Workflow deploy end-to-end in one unbroken stretch — four real bugs found
+and fixed back to back with no pause in between.) Use judgment on batch
+size — a couple of related one-line IAM/syntax fixes found seconds apart
+can go together; anything that changes the design, not just corrects a
+typo/permission, warrants stopping immediately rather than waiting for a
+batch.
+
 ## Git workflow
 
-- **Never create a branch unless explicitly asked for one.** Do not
-  proactively branch "to be safe" or "per house style" before making
-  changes. Commit locally on whatever branch is currently checked out.
-  The GitHub ruleset already blocks pushing/merging straight to `main`
-  without a PR, so this can't silently corrupt `main` — it just means
-  branching and opening a PR are things the user asks for, not things
-  that happen automatically alongside every change.
-- **When a branch is explicitly requested: it targets `main` directly.
-  Never branch off another unmerged feature branch**, even when the new
-  work genuinely needs files that only exist there. This was gotten wrong
-  four times in a row on this repo (stacking plan→bronze→silver→gold
-  branches on each other), and one instance actually merged into the
-  wrong branch before being caught, silently leaving `main` without an
-  entire tier of work. If work truly depends on another branch's unmerged
-  content, wait for that branch to merge first, or accept the PR's diff
-  will look bundled until it does — don't chain branches to work around it.
-- One PR per logical unit of work, always into `main`. This repo uses a
-  GitHub ruleset blocking direct pushes/merges to `main` without a PR.
+**Current rule (supersedes everything below it in this section): work
+directly on `main`, make the file edits, and stop there — do NOT run
+`git commit` (or `git add`/push) unless explicitly asked to. The user
+reviews changes themselves and commits when ready.** Never create a
+branch unless explicitly asked for one either. If asked to commit
+something specific, commit only that, on `main`, without branching first.
+
+Known friction this creates, flagged rather than silently worked around:
+this repo has a GitHub ruleset blocking direct pushes/merges to `main`
+without a PR. If the user tries to push local commits on `main` straight
+to `origin/main`, that push will likely be rejected by the ruleset. That's
+a repo-configuration decision for the user to resolve (adjust the
+ruleset, use an admin override, or go back to a PR for pushing even
+though local commits happen directly on `main`) — don't change the
+ruleset unilaterally to work around it.
+
+**Historical context, in case branch-based work is asked for again:**
+when a branch *is* explicitly requested, it should target `main`
+directly — never branch off another unmerged feature branch, even when
+the new work genuinely needs files that only exist there. This was
+gotten wrong four times in a row on this repo earlier (stacking
+plan→bronze→silver→gold branches on each other), and one instance
+actually merged into the wrong branch before being caught, silently
+leaving `main` without an entire tier of work. If work truly depends on
+another branch's unmerged content, wait for that branch to merge first,
+or accept the PR's diff will look bundled until it does — don't chain
+branches to work around it.
 - **Separate commits for source/code changes vs. documentation changes**,
   even when they land in the same turn. Don't mix them in one commit.
 - Merging a PR requires the user (or their explicit go-ahead) — Claude

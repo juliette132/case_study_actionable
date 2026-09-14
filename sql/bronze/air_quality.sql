@@ -13,6 +13,11 @@
 -- autodetect left them as STRING) - SAFE_CAST rather than CAST so one
 -- unparseable value nulls just that column, not the whole row.
 --
+-- _updated_at: when THIS bronze table was last rebuilt by the pipeline -
+-- see bronze/weather.sql for the same column and why it's not named
+-- "ingested_at" (that name means something different at the raw_data
+-- layer, and this table has no per-row ingestion timestamp anyway).
+--
 -- Dedup on (city_key, country_key): the CSV is a one-time snapshot with
 -- no per-row ingestion timestamp, so "keep newest" isn't answerable yet -
 -- ORDER BY City is just a stable, deterministic tie-break, not a
@@ -46,6 +51,7 @@ SELECT
   SAFE_CAST(`NO2 AQI Value` AS INT64) AS no2_aqi_value,
   `NO2 AQI Category` AS no2_aqi_category,
   SAFE_CAST(`PM2_5 AQI Value` AS INT64) AS pm25_aqi_value,
-  `PM2_5 AQI Category` AS pm25_aqi_category
+  `PM2_5 AQI Category` AS pm25_aqi_category,
+  CURRENT_TIMESTAMP() AS _updated_at
 FROM deduped
 WHERE rn = 1;

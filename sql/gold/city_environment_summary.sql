@@ -1,8 +1,14 @@
--- Option A: side-by-side summary. Deliberately the simplest gold table -
+-- Option A: side-by-side summary. Deliberately the simplest gold output -
 -- no blending, no invented thresholds, nothing to defend. Just puts
 -- temperature and air quality next to each other per city, for direct
--- comparison or as a BI-tool source table.
-CREATE OR REPLACE TABLE analytics.city_environment_summary AS
+-- comparison or as a BI-tool source.
+--
+-- A VIEW, not a table, per gold-layer convention: no stored data of its
+-- own to go stale, always reflects whatever silver.weather_air_quality
+-- currently holds, and needs no scheduled rebuild step. Callers wanting a
+-- guaranteed row order should add their own ORDER BY - a view's ORDER BY
+-- is not guaranteed to survive query planning.
+CREATE OR REPLACE VIEW analytics.city_environment_summary AS
 SELECT
   city_name,
   country_key,

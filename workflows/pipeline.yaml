@@ -1,0 +1,172 @@
+# Orchestrates the recurring part of the pipeline: ingest weather + SFTP
+# CSV (parallel) -> bronze (parallel) -> silver. Gold is views, not
+# tables (see sql/gold/*.sql) - a view has no stored data to refresh, so
+# gold's CREATE OR REPLACE VIEW statements run once at deploy time
+# (scripts/deploy_workflow.sh), not on every pipeline execution.
+#
+# Deploy: scripts/deploy_workflow.sh (not run automatically - review first).
+#
+# SQL is read from Cloud Storage at runtime (see load_all_sql below)
+# rather than duplicated inline here, so sql/*.sql in this repo stays the
+# single source of truth - the deploy script syncs sql/ to GCS on deploy.
+main:
+  params: [args]
+  steps:
+    - init:
+        assign:
+          - project_id: "case-study-act"
+          - bucket: "case-study-act-pipeline-sql"
+          - weather_url: "https://weather-ingest-yds5aing2a-ew.a.run.app"
+          - sftp_url: "https://sftp-ingest-yds5aing2a-ew.a.run.app"
+          - ingestion_status:
+              weather: "pending"
+              sftp: "pending"
+          - sql_files:
+              - "bronze/weather.sql"
+              - "bronze/air_quality.sql"
+              - "silver/weather_air_quality.sql"
+          - sql: {}
+
+    # --- Ingestion: both sources in parallel, each independently retried ---
+    - run_ingestion:
+        parallel:
+          shared: [ingestion_status]
+          branches:
+            - weather_branch:
+                steps:
+                  - call_weather:
+                      try:
+                        call: http.post
+                        args:
+                          url: ${weather_url}
+                          auth:
+                            type: OIDC
+                        result: weather_result
+                      retry:
+                        predicate: ${http.default_retry_predicate}
+                        max_retries: 3
+                        backoff:
+                          initial_delay: 5
+                          max_delay: 60
+                          multiplier: 2
+                      except:
+                        as: e
+                        steps:
+                          - log_weather_failure:
+                              call: sys.log
+                              args:
+                                severity: ERROR
+                                text: '${"weather-ingest failed: " + json.encode_to_string(e)}'
+                          - mark_weather_failed:
+                              assign:
+                                - ingestion_status.weather: "failed"
+                  - mark_weather_ok:
+                      assign:
+                        - ingestion_status.weather: "ok"
+            - sftp_branch:
+                steps:
+                  - call_sftp:
+                      try:
+                        call: http.post
+                        args:
+                          url: ${sftp_url}
+                          auth:
+                            type: OIDC
+                        result: sftp_result
+                      retry:
+                        predicate: ${http.default_retry_predicate}
+                        max_retries: 3
+                        backoff:
+                          initial_delay: 5
+                          max_delay: 60
+                          multiplier: 2
+                      except:
+                        as: e
+                        steps:
+                          - log_sftp_failure:
+                              call: sys.log
+                              args:
+                                severity: ERROR
+                                text: '${"sftp-ingest failed: " + json.encode_to_string(e)}'
+                          - mark_sftp_failed:
+                              assign:
+                                - ingestion_status.sftp: "failed"
+                  - mark_sftp_ok:
+                      assign:
+                        - ingestion_status.sftp: "ok"
+
+    # --- Abort before the transform layer if EITHER source failed ---
+    # Corrected from an earlier "only abort if both fail" design: silver
+    # is a JOIN of both bronze tables and gold reads from silver, so a
+    # run with only one source fresh doesn't produce "a result that's
+    # current for one side" - it produces a joined/aggregated result that
+    # silently mixes this run's fresh data with a stale carry-over on the
+    # other side, which is misleading, not just incomplete. Requiring
+    # both sources to have succeeded this run is the correct gate here.
+    - check_ingestion:
+        switch:
+          - condition: ${ingestion_status.weather == "failed" or ingestion_status.sftp == "failed"}
+            steps:
+              - abort_source_failed:
+                  raise: '${"Ingestion incomplete this run (" + json.encode_to_string(ingestion_status) + ") - aborting before the transform layer rather than joining fresh data with a stale carry-over."}'
+
+    - log_ingestion_summary:
+        call: sys.log
+        args:
+          severity: INFO
+          text: '${"Ingestion status: " + json.encode_to_string(ingestion_status)}'
+
+    # --- Load every SQL file's text from GCS once, keyed by path ---
+    - load_all_sql:
+        for:
+          value: f
+          in: ${sql_files}
+          steps:
+            - get_object:
+                call: googleapis.storage.v1.objects.get
+                args:
+                  bucket: ${bucket}
+                  object: ${text.url_encode(f)}
+                  alt: "media"
+                result: raw_bytes
+            - store_sql:
+                assign:
+                  - sql[f]: ${text.decode(raw_bytes)}
+
+    # --- Bronze: the two tables are independent of each other ---
+    - build_bronze:
+        parallel:
+          branches:
+            - bronze_weather_branch:
+                steps:
+                  - run_bronze_weather:
+                      call: googleapis.bigquery.v2.jobs.query
+                      args:
+                        projectId: ${project_id}
+                        body:
+                          useLegacySql: false
+                          query: ${sql["bronze/weather.sql"]}
+            - bronze_air_quality_branch:
+                steps:
+                  - run_bronze_air_quality:
+                      call: googleapis.bigquery.v2.jobs.query
+                      args:
+                        projectId: ${project_id}
+                        body:
+                          useLegacySql: false
+                          query: ${sql["bronze/air_quality.sql"]}
+
+    # --- Silver: the one join, depends on both bronze tables ---
+    - build_silver:
+        call: googleapis.bigquery.v2.jobs.query
+        args:
+          projectId: ${project_id}
+          body:
+            useLegacySql: false
+            query: ${sql["silver/weather_air_quality.sql"]}
+
+    # Gold is views (see note above) - nothing to run here each cycle.
+    # Querying analytics.* always reflects the silver data just written.
+
+    - done:
+        return: '${"Pipeline completed. Ingestion: " + json.encode_to_string(ingestion_status)}'
