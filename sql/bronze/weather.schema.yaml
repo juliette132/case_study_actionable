@@ -6,9 +6,13 @@
 # hand-typed from the query.
 table: bronze.weather
 description: >
-  Normalized, deduplicated weather observations. One row per
-  (location_query, observed_at) - the latest ingested_at wins on
-  duplicates.
+  Normalized weather observations, collapsed to ONE row per city - the
+  single most recent observation, by observed_at (the real-world
+  observation time, not when the pipeline happened to poll). Not a time
+  series; raw_data.import_weather (append-only) still holds the full
+  history if that's ever needed. observed_at/ingested_at on each row
+  describe that one kept observation, not "the latest of many still
+  present here."
 columns:
   - name: location_query
     type: STRING
