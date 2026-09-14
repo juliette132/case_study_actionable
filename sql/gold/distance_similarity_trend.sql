@@ -15,7 +15,11 @@
 -- per-band breakdown) - deliberately not computed per-band, which would
 -- answer a different, narrower question (correlation *within* a distance
 -- range) than the one this table is for (is there an overall trend).
-CREATE OR REPLACE TABLE analytics.distance_similarity_trend AS
+--
+-- A VIEW, not a table (see city_environment_summary.sql for why). The
+-- self-join producing 780 pairs from 40 cities is trivial to recompute
+-- per query.
+CREATE OR REPLACE VIEW analytics.distance_similarity_trend AS
 WITH cities AS (
   SELECT s.city_name, s.aqi_value, s.temperature_c, w.latitude, w.longitude
   FROM `silver.weather_air_quality` s

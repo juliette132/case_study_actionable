@@ -11,6 +11,9 @@
 -- observation per city before joining, rather than joining on every
 -- historical row (which would multiply air-quality rows once weather
 -- has accumulated more than one hourly reading per city).
+--
+-- _updated_at: when THIS silver table was last rebuilt - see
+-- bronze/weather.sql for the same column and naming rationale.
 CREATE OR REPLACE TABLE silver.weather_air_quality AS
 WITH latest_weather AS (
   SELECT *,
@@ -29,7 +32,8 @@ SELECT
   w.observed_at AS weather_observed_at,
   a.aqi_value,
   a.aqi_category,
-  a.pm25_aqi_value
+  a.pm25_aqi_value,
+  CURRENT_TIMESTAMP() AS _updated_at
 FROM latest_weather w
 JOIN `bronze.air_quality` a
   ON w.city_key = a.city_key AND w.country_key = a.country_key

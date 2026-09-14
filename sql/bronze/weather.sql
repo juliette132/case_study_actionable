@@ -9,6 +9,12 @@
 -- collapse to 51 here, confirming insertId dedup alone isn't a hard
 -- guarantee. Drops raw_response - bronze is the normalized layer, not
 -- the audit trail (that's still in raw_data.import_weather).
+--
+-- _updated_at: when THIS bronze table was last rebuilt by the pipeline -
+-- not the same thing as ingested_at (when the underlying row was first
+-- fetched from the API). Named with an underscore prefix and _updated_at
+-- rather than reusing "ingested_at" specifically to avoid colliding with
+-- that existing, differently-scoped column.
 CREATE OR REPLACE TABLE bronze.weather AS
 WITH deduped AS (
   SELECT *,
@@ -32,6 +38,7 @@ SELECT
   wind_speed_ms,
   weather_main,
   weather_description,
-  ingested_at
+  ingested_at,
+  CURRENT_TIMESTAMP() AS _updated_at
 FROM deduped
 WHERE rn = 1;
