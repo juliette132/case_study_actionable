@@ -609,3 +609,151 @@ different things here.
 **Corrected / questioned:**
 - ...
 ```
+
+## 2026-09-13 (continued) — Orchestration decision (Cloud Workflows)
+
+**Prompt:** pasted the full original brief, then: *"Now I want help with
+the 2nd half of point 3 with the orchestration decisions. Walk me through
+the considerations and justifications and how to implement it"*
+
+**What the AI did:**
+- Compared 4 orchestration approaches (Scheduler-offset chaining,
+  Composer, Pub/Sub event chaining, Cloud Workflows) against this
+  project's actual scale and cost profile, recommending Cloud Workflows
+  with reasoning tied to concrete numbers (Composer's realistic ~$300+/mo
+  idle cost vs. Workflows' near-free step pricing at this volume).
+- Wrote `workflows/pipeline.yaml` and `scripts/deploy_workflow.sh` — not
+  deployed, per the standing "no auto commits/actions without being
+  asked" rule; written for review.
+
+**Verified rather than assumed, given the pattern of small-but-real
+gotchas found everywhere else in this project:** before writing any
+YAML, looked up the exact syntax for three specific pieces this design
+depends on, rather than writing from memory: the OIDC auth block for
+calling a Cloud Function from a workflow, the BigQuery connector call
+shape (`googleapis.bigquery.v2.jobs.query`), and parallel-branch
+semantics (confirmed `continueAll` is the *only* supported policy, not
+an option to configure). Also verified the Cloud Scheduler -> Workflows
+trigger pattern (OAuth, not OIDC, since it targets a `*.googleapis.com`
+endpoint) before writing it into the deploy script.
+
+**A design choice made explicitly to avoid a duplication risk:** the
+workflow reads each `.sql` file's content from Cloud Storage at runtime
+instead of embedding ~260 lines of already-tested SQL inline in the YAML
+a second time — chosen specifically to keep `sql/*.sql` as the single
+source of truth, after noticing that inlining would recreate the same
+"two copies to keep in sync" problem flagged earlier in
+`docs/transform_layer_plan.md`.
+
+**Not yet verified:** the workflow itself has not been deployed or
+executed — the connector/syntax pieces above were checked individually
+against documentation, but the full YAML (in particular the `for` loop
+populating a map by dynamic key, `sql[f]: ...`) has not been run
+end-to-end. Flagged as such rather than presented as tested.
+
+## 2026-09-13 (continued) — Two design corrections, both from the user, not self-caught
+
+**Prompt:** *"don't create files without my approval... for example,
+silver and gold layers rely on both sources being fresh, so partial
+source resilience is not a good idea. Also, convention says gold layers
+should produce views and not tables, so fix that."*
+
+**What was wrong, and why it wasn't caught earlier:**
+1. The original workflow only aborted the transform layer if *both*
+   ingestion sources failed, reasoning that a full-refresh table just
+   reflects "one fresh source, one stale one." That reasoning didn't
+   account for silver being a *join* of both bronze tables - a partial
+   failure doesn't produce an incomplete-but-honest result, it produces a
+   joined output that silently blends fresh data with a stale carry-over,
+   which is a correctness problem, not just a completeness one. This was
+   presented confidently in `docs/architecture.md` without the flaw being
+   noticed - caught entirely by the user, not by any verification step
+   the AI ran.
+2. Gold was built as materialized tables; the user pointed out the
+   medallion-architecture convention is for gold to be views. Also not
+   self-caught.
+
+**What changed:** `workflows/pipeline.yaml`'s abort condition flipped
+from `weather failed AND sftp failed` to `weather failed OR sftp failed`;
+all four `sql/gold/*.sql` files changed `CREATE OR REPLACE TABLE` to
+`CREATE OR REPLACE VIEW`, which also removed the need for a `build_gold`
+step in the recurring workflow entirely (a view has nothing to
+schedule). `scripts/deploy_workflow.sh` now creates the gold views once
+at deploy time instead. `docs/architecture.md` rewritten to explain both
+corrections and why the original reasoning was wrong, not just what the
+new behavior is.
+
+**Also applied in this same turn:** the user added a standing rule -
+don't create new files without proposing options first. Recorded in
+`CLAUDE.md` and this session's memory. The file edits in this entry were
+direct corrections to already-decided, already-existing designs (the
+user stated exactly what was wrong and what to do), not new artifacts, so
+they were applied directly rather than gated behind options - the new
+"YAML files for the BigQuery tables" request in the same message *was*
+treated as needing options first, since its shape/purpose wasn't
+specified.
+
+## 2026-09-13 (continued) — Deployed and verified the orchestration Workflow live
+
+**Prompt:** *"proceed with making sure everything works before doing a pr"*
+
+**What the AI did:** ran `scripts/deploy_workflow.sh` for real (not just
+reviewed), enabled the Workflows API, deployed `workflows/pipeline.yaml`,
+created the four gold views for real (dropping the old materialized
+tables first, since `CREATE OR REPLACE VIEW` can't convert an existing
+TABLE), and triggered `gcloud workflows run pipeline` to completion.
+
+**Four more real bugs found by actually running it, none visible from
+reading the files** (full detail in `docs/architecture.md`'s
+Orchestration section):
+1. A YAML `assign` block with 7 keys under one list entry instead of one
+   entry per key - rejected at deploy time with a parse error.
+2. `gcloud workflows add-iam-policy-binding` doesn't exist - checked
+   `gcloud workflows --help` in GA and beta before concluding this and
+   using a project-level grant instead of guessing at alternate syntax.
+3. `sys.log` needed `logging.logWriter` granted to **two** separate
+   identities - the workflow's own service account, and a Google-managed
+   Workflows service agent that turned out to actually perform the write.
+   Found only because the identical error persisted after the first
+   grant, which prompted checking for a second identity rather than
+   assuming the role name itself was wrong.
+4. Bronze failed with Access Denied on `raw_data.*` - IAM had covered
+   writing to bronze/silver/analytics but nothing granted read access to
+   the dataset bronze actually queries from.
+
+**Verified, not just "ran without error":** after the execution reported
+`SUCCEEDED`, queried BigQuery directly to confirm `bronze.weather`'s
+freshest `ingested_at` matched the execution's own start time exactly
+(proving real fresh ingestion happened, not a cached/stale success), and
+that silver and the gold views held the expected 40 rows.
+
+**Also in this turn:** the user added a new standing rule - collect a few
+issues into a batch and stop to report before continuing, rather than
+debugging an entire chain unattended. Recorded in `CLAUDE.md` and memory.
+Noted honestly here that this entry itself is an example of *not* having
+followed that rule yet (all four bugs above were fixed back to back in
+one stretch before the rule existed) - applying it going forward, not
+retroactively to this turn.
+
+## 2026-09-13 (continued) — `_updated_at` tracking columns
+
+**Prompt:** *"also, add ingestion timestamps to the bronze and silver
+tables for internal tracking like _updated_at or _ingested_at or
+_created_at"*
+
+**What the AI did:** added `_updated_at TIMESTAMP` (via
+`CURRENT_TIMESTAMP()`) to all three bronze/silver build queries and their
+schema docs. Picked `_updated_at` specifically out of the three names
+offered, and explained why before applying it: `bronze.weather` already
+has an `ingested_at` column meaning something different (when the
+*source row* was fetched), so reusing that name for "when this *table*
+was last rebuilt" would collide. Deliberately did **not** add it to the
+gold views - a view has no build moment of its own, so the column would
+show "whenever queried," which is a different and misleading claim.
+
+**Verified with the actual orchestrated pipeline, not a manual query:**
+re-synced the updated SQL to the GCS bucket the Workflow reads from,
+triggered a real `gcloud workflows run pipeline` execution, and confirmed
+all three `_updated_at` values landed within that exact execution's
+start/end window - proving the column reflects a real pipeline-driven
+rebuild, not just a manually-run query with a plausible-looking timestamp.

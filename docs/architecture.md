@@ -79,6 +79,105 @@ a transient network blip safe rather than duplicating data).
   should be set to retry on 5xx but not on 207 — a partial failure on one
   city is a data-quality signal to look at, not something blindly retried.
 
+## Orchestration: why Cloud Workflows, once there was something to orchestrate
+
+Until the transform layer (`bronze`/`silver`/`gold`) existed, there was no
+real orchestration problem: `weather-ingest` and `sftp-ingest` run on
+independent hourly Cloud Scheduler jobs with zero dependency between them.
+The transform layer changes that — bronze needs ingestion to have run,
+silver needs both bronze tables, gold needs silver — and none of that was
+scheduled; it had only ever been run by hand.
+
+**Options considered:**
+
+| Option | Verdict |
+|---|---|
+| Give bronze/silver/gold their own Scheduler jobs at fixed time offsets | Rejected — no real dependency awareness; a slow or failed ingestion run still lets downstream jobs fire against stale/absent data, with no single place to halt the chain. |
+| Cloud Composer (managed Airflow) | Rejected for this project's scale — needs a persistent GKE-backed environment running 24/7, realistically $300+/month even minimally sized, which would consume most of the free credit just to stay idle between hourly runs. Right tool for many interdependent pipelines with complex scheduling; disproportionate here. |
+| Pub/Sub event-driven chaining (each step publishes "done", next step Eventarc-triggered) | Valid GCP-native pattern, but the fan-in (wait for *both* weather and SFTP before bronze runs) needs extra state — a Firestore doc or BigQuery flag row — to coordinate the join. Real added complexity for no clear benefit over the option below. |
+| **Cloud Workflows** | **Chosen** — GCP-native, serverless (no idle cost: ~5,000 free internal steps/month, ~$0.01/1,000 after), gives real dependency-aware sequencing, built-in retry policies, and one execution log per run instead of correlating two Cloud Functions' logs with however many separate BigQuery job IDs by hand. |
+
+**Deployed and verified live** (2026-09-13): `gcloud workflows run pipeline`
+returned `state: SUCCEEDED`, `bronze.weather`'s freshest `ingested_at`
+matched the execution's own start time exactly, and `silver`/the gold
+views held the expected 40 rows. Getting there surfaced four more real
+bugs — none visible from reading the YAML/script, only from actually
+running them:
+1. The `init` step's `assign` block had all 7 variables under one list
+   entry (`- key: val` repeated as multiple keys of one item); Workflows
+   requires exactly one assignment per list entry. Rejected at deploy
+   time with a clear parse error — fixed by splitting each into its own
+   `-` entry.
+2. `gcloud workflows add-iam-policy-binding` does not exist — confirmed
+   by checking `gcloud workflows --help` in both GA and beta, neither
+   has any IAM subcommand for this resource type. Granted
+   `roles/workflows.invoker` at the **project** level instead (only one
+   workflow exists in this project, so the practical scope difference is
+   negligible; a resource-scoped binding would need a raw REST call).
+3. `sys.log` calls failed with `403 logging.logEntries.create` even
+   after granting `workflow-runner-sa` (the workflow's own runtime
+   identity) `roles/logging.logWriter` — the identical error persisted
+   until a **second**, separate grant was made to
+   `service-{project_number}@gcp-sa-workflows.iam.gserviceaccount.com`,
+   a Google-managed service agent auto-created when the Workflows API
+   was enabled, which turns out to be what actually performs the log
+   write on the control plane's behalf.
+4. `build_bronze` failed with `403 Access Denied` on `raw_data.import_weather`
+   / `raw_data.import_csv_data` — the IAM grants had covered writing to
+   `bronze`/`silver`/`analytics`, but nothing had granted **read** access
+   to `raw_data`, the dataset bronze actually queries *from*. Fixed with
+   `roles/bigquery.dataViewer` scoped to `raw_data`.
+
+**Design:** ingest weather + SFTP in parallel → bronze (2 tables,
+parallel) → silver. Gold is **views**, not tables (see below) — nothing
+gold-related runs in the recurring workflow at all. SQL is read from
+Cloud Storage at runtime (`scripts/deploy_workflow.sh` syncs `sql/` to a
+GCS bucket on deploy) rather than duplicated inline in the workflow YAML,
+so `sql/*.sql` stays
+the single source of truth.
+
+**Gold is views, not materialized tables — a correction from an earlier
+draft.** `analytics.*` is queried, not scheduled: a view has no stored
+data of its own to refresh, so it always reflects whatever `silver`
+currently holds, with no build step, no staleness risk from a missed
+run, and no orchestration needed for it at all. `scripts/deploy_workflow.sh`
+runs each `CREATE OR REPLACE VIEW` once at deploy time (cheap to also
+re-run any time a view definition changes). The heavier queries here (a
+40×40 self cross-join with `ST_DISTANCE` for the geographic-proximity
+views) are trivial to recompute per query at this data volume, so there's
+no materialization case to make on performance grounds either.
+
+**Error handling, worked through concretely, not just asserted:**
+- Each ingestion call gets its own retry (Workflows' default predicate
+  retries transient network errors and 429/502/503/504 — deliberately
+  *not* a 500 from our own function, since that means something like
+  Secret Manager being down, and blindly retrying won't fix a real
+  outage; better to fail fast and mark that source down for the run).
+- **The workflow aborts before touching bronze/silver if *either* source
+  failed this run — a correction from an earlier draft that only aborted
+  if *both* failed.** The original reasoning ("bronze/silver/gold are
+  full-refresh, so a partial run just reflects one fresh source and one
+  stale one") missed that silver is a *join* of both bronze tables and
+  gold reads from silver — a run with only one source fresh doesn't
+  produce a result that's "current for one side," it produces a joined
+  output that silently mixes this run's fresh data with a stale
+  carry-over on the other side. That's a misleading result, not merely an
+  incomplete one, so requiring both sources to succeed before rebuilding
+  the transform layer is the correct gate.
+
+**Idempotency at this layer is close to free**, and worth naming as a
+payoff of an earlier design choice: because bronze/silver are full-refresh
+CTAS (and gold is a live view), re-running the workflow (after a retry, or
+a manual re-trigger) just recomputes from current state — no risk of
+duplicate/accumulating rows the way the append-only `raw_data.*` tables
+needed explicit `insertId`/content-hash dedup for.
+
+**Operational change this makes:** the two existing per-function
+Scheduler jobs (`weather-ingest-schedule`, `sftp-ingest-schedule`) get
+paused (not deleted — reversible) in favor of one `pipeline-schedule` job
+that triggers a Workflow execution, which then calls both functions
+itself in the right order.
+
 ## SFTP CSV ingestion design
 
 Same overall shape as the weather function (fetch → load → BigQuery,

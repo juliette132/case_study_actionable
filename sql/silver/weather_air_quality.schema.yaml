@@ -1,0 +1,42 @@
+# Documentation-only schema reference for silver.weather_air_quality
+# (built by weather_air_quality.sql). Not read by any tooling - see
+# sql/bronze/weather.schema.yaml for why this file exists. Pulled from
+# the real deployed table (`bq show --schema`), not hand-typed from the
+# query.
+table: silver.weather_air_quality
+description: >
+  The one cross-source join. One row per city matched between bronze.weather
+  and bronze.air_quality on (city_key, country_key) - an INNER join by
+  design, so cities present in only one source don't appear here (see
+  the note in weather_air_quality.sql for why that's correct, not a bug).
+columns:
+  - name: city_key
+    type: STRING
+    description: Shared join key with both bronze tables.
+  - name: country_key
+    type: STRING
+    description: ISO 3166-1 alpha-2 code - shared join key with both bronze tables.
+  - name: city_name
+    type: STRING
+    description: Display name, taken from bronze.weather's city_name.
+  - name: temperature_c
+    type: FLOAT
+  - name: humidity_pct
+    type: INTEGER
+  - name: weather_description
+    type: STRING
+  - name: weather_observed_at
+    type: TIMESTAMP
+    description: The weather observation's own timestamp (renamed from bronze.weather's observed_at to disambiguate from ingestion time).
+  - name: aqi_value
+    type: INTEGER
+  - name: aqi_category
+    type: STRING
+  - name: pm25_aqi_value
+    type: INTEGER
+    description: Kept specifically (unlike the other AQI sub-values) since PM2.5 is usually the dominant driver of overall AQI category.
+  - name: _updated_at
+    type: TIMESTAMP
+    description: >
+      When this silver table was last rebuilt by the pipeline.
+      Internal/metadata column, hence the underscore prefix.
