@@ -6,22 +6,14 @@
 -- only) correctly don't appear here. They're still available untouched in
 -- bronze.weather / bronze.air_quality for single-source gold aggregates.
 --
--- bronze.weather has one row per (city, observation time) - not yet
--- collapsed to "current conditions" - so this takes the latest
--- observation per city before joining, rather than joining on every
--- historical row (which would multiply air-quality rows once weather
--- has accumulated more than one hourly reading per city).
+-- No re-ranking needed here anymore: bronze.weather now collapses to one
+-- row per city itself (see bronze/weather.sql), so this is a plain join,
+-- not a join against a table that still needs its own latest-row logic
+-- re-derived on every read.
 --
 -- _updated_at: when THIS silver table was last rebuilt - see
 -- bronze/weather.sql for the same column and naming rationale.
 CREATE OR REPLACE TABLE silver.weather_air_quality AS
-WITH latest_weather AS (
-  SELECT *,
-    ROW_NUMBER() OVER (
-      PARTITION BY city_key, country_key ORDER BY ingested_at DESC
-    ) AS rn
-  FROM `bronze.weather`
-)
 SELECT
   w.city_key,
   w.country_key,
@@ -34,7 +26,6 @@ SELECT
   a.aqi_category,
   a.pm25_aqi_value,
   CURRENT_TIMESTAMP() AS _updated_at
-FROM latest_weather w
+FROM `bronze.weather` w
 JOIN `bronze.air_quality` a
-  ON w.city_key = a.city_key AND w.country_key = a.country_key
-WHERE w.rn = 1;
+  ON w.city_key = a.city_key AND w.country_key = a.country_key;

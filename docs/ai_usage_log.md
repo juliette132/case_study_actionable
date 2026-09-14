@@ -757,3 +757,32 @@ triggered a real `gcloud workflows run pipeline` execution, and confirmed
 all three `_updated_at` values landed within that exact execution's
 start/end window - proving the column reflects a real pipeline-driven
 rebuild, not just a manually-run query with a plausible-looking timestamp.
+
+## 2026-09-14 — Collapse bronze.weather to current-only, cascading cleanup
+
+**Prompt:** *"Walk me through how the ingested and updated at columns
+work. For the raw at air quality, there is no timestamp, but there is a
+timestamp for the bronze air quality. Also, for the weather, because
+there is a new time everytime it refreshes, it creates a new row for
+several locations. I'd like it to only take the most recent weather and
+get rid of this pseudo archive. once you are done writing this code,
+explain it back to me..."*
+
+**What the AI did:** rewrote `sql/bronze/weather.sql` to collapse to one
+row per city (most recent `ingested_at`) instead of keeping every
+distinct historical observation. Traced the consequences through the
+rest of the transform layer rather than stopping at the one file named:
+`sql/silver/weather_air_quality.sql`'s own latest-row `ROW_NUMBER()` CTE
+became redundant once bronze already guarantees one row per city, so it
+was simplified to a plain join; the same redundant `QUALIFY
+ROW_NUMBER()...` in both `sql/gold/nearest_city_comparison.sql` and
+`sql/gold/distance_similarity_trend.sql` (each independently re-deriving
+"latest weather per city" a second time) was removed for the same
+reason. One stale doc line in `docs/transform_layer_plan.md` describing
+the old partition key was corrected to match.
+
+**Not yet done, per explicit instruction:** nothing committed, nothing
+run against real BigQuery. The user's stated sequence: write the code,
+get an explanation back to confirm understanding, then decide whether to
+commit/test/open a PR - each of those three stayed undone until that
+green light.

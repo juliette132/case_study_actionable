@@ -12,13 +12,15 @@
 -- A VIEW, not a table (see city_environment_summary.sql for why). The
 -- self cross-join + ST_DISTANCE over 40 cities (~1,560 pairs) is trivial
 -- to recompute per query - not a reason to materialize this.
+--
+-- No re-ranking needed on the bronze.weather join: bronze.weather now
+-- collapses to one row per city itself (see bronze/weather.sql).
 CREATE OR REPLACE VIEW analytics.nearest_city_comparison AS
 WITH cities AS (
   SELECT s.city_key, s.city_name, s.country_key, s.aqi_value, s.temperature_c,
          w.latitude, w.longitude
   FROM `silver.weather_air_quality` s
   JOIN `bronze.weather` w ON s.city_key = w.city_key AND s.country_key = w.country_key
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY s.city_key ORDER BY w.ingested_at DESC) = 1
 ),
 pairs AS (
   SELECT

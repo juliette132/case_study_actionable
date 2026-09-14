@@ -16,13 +16,12 @@ only two sources to conform before the one join that matters.)
 
 ## Tier 1 — Bronze (`bronze` dataset): normalized, typed, deduplicated ✅ built and tested
 
-One row per source record still — no joining, no aggregation yet. SQL:
-`sql/bronze/weather.sql`, `sql/bronze/air_quality.sql`,
-`scripts/build_country_code_map.py`.
+No joining, no aggregation yet. SQL: `sql/bronze/weather.sql`,
+`sql/bronze/air_quality.sql`, `scripts/build_country_code_map.py`.
 
 | Table | Source | What it does |
 |---|---|---|
-| `bronze.weather` | `raw_data.import_weather` | Adds `city_key` (accent-stripped, lowercased `city_name` — see normalization expression below) and `country_key` (= the ISO code weather already stores). Dedups via `ROW_NUMBER() OVER (PARTITION BY location_query, observed_at ORDER BY ingested_at DESC)`, keeping rank 1. Drops `raw_response`. |
+| `bronze.weather` | `raw_data.import_weather` | Adds `city_key` (accent-stripped, lowercased `city_name` — see normalization expression below) and `country_key` (= the ISO code weather already stores). **Collapses to one row per city** — the most recent observation by `observed_at`, the real-world observation time (`ROW_NUMBER() OVER (PARTITION BY city_key, country_key ORDER BY observed_at DESC)`, rank 1) — not every hourly reading; `raw_data.import_weather` (append-only) still holds the full history. Drops `raw_response`. |
 | `bronze.air_quality` | `raw_data.import_csv_data` | Adds `city_key` normalized the same way from `City`. `country_key` resolved via a **JOIN** against `bronze.country_code_map` (not a UDF — see below). Casts every `... AQI Value` column from STRING to INT64 via `SAFE_CAST`. Dedups on `(city_key, country_key)` — see caveat below. |
 
 **Test results (real data, run 2026-09-13):**
